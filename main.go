@@ -1,5 +1,5 @@
 // teleqna-eval runs TeleQnA multiple-choice questions against an
-// OpenAI-compatible model API, optionally bridging tools from a
+// OpenAI-compatible chat API, optionally bridging tools from a
 // 3gpp-mcp server so the model can consult 3GPP specifications while
 // answering. Results are written as JSONL plus a summary line.
 package main
@@ -613,6 +613,7 @@ func main() {
 		maxRounds      = flag.Int("max-rounds", 8, "max tool-calling rounds per question")
 		maxTokens      = flag.Int("max-tokens", 8192, "max_tokens per completion (0 = provider default)")
 		maxTokensField = flag.String("max-tokens-field", "max_tokens", "request field name for the token cap (some providers use max_completion_tokens)")
+		httpTimeout    = flag.Int("http-timeout", 300, "per-request timeout in seconds; raise it when running without a token cap")
 		extraBody      = flag.String("extra-body", "", "JSON object merged into every chat request, e.g. '{\"reasoning_effort\":\"none\"}'")
 		resultMax      = flag.Int("tool-result-max", 16000, "max bytes of a tool result passed to the model")
 		outPath        = flag.String("out", "", "JSONL output path (default results/<model>-<n>q-seed<seed>.jsonl)")
@@ -687,7 +688,7 @@ func main() {
 		log.Printf("bridged %d MCP tools from %s", len(tools), *mcpURL)
 	}
 
-	httpc := &http.Client{Timeout: 300 * time.Second}
+	httpc := &http.Client{Timeout: time.Duration(*httpTimeout) * time.Second}
 	var be backend
 	switch *api {
 	case "chat":

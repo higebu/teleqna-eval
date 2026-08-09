@@ -169,6 +169,7 @@ summary line on stdout.
 | `-max-rounds` | 8 | Tool-calling rounds per question before forcing an answer |
 | `-max-tokens` | 8192 | Token cap per completion (0 = provider default) |
 | `-max-tokens-field` | `max_tokens` | Request field name for the cap (e.g. `max_completion_tokens`) |
+| `-http-timeout` | 300 | Per-request timeout in seconds; raise it when running without a token cap |
 | `-tool-result-max` | 16000 | Max bytes of a tool result passed to the model |
 | `-out` | auto | JSONL output path |
 
