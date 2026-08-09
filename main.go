@@ -202,13 +202,14 @@ type chatUsage struct {
 type chatClient struct {
 	BaseURL, APIKey, Model string
 	MaxTokens              int
+	MaxTokensField         string // "max_tokens", or "max_completion_tokens" for newer OpenAI models
 	HTTP                   *http.Client
 }
 
 func (c *chatClient) complete(messages []chatMessage, tools []map[string]any) (*chatMessage, *chatUsage, error) {
 	reqBody := map[string]any{"model": c.Model, "messages": messages}
 	if c.MaxTokens > 0 {
-		reqBody["max_tokens"] = c.MaxTokens
+		reqBody[c.MaxTokensField] = c.MaxTokens
 	}
 	if len(tools) > 0 {
 		reqBody["tools"] = tools
@@ -411,21 +412,22 @@ func evalOne(chat *chatClient, mcp *MCPClient, tools []map[string]any, q Questio
 
 func main() {
 	var (
-		model     = flag.String("model", "", "model id on the OpenAI-compatible endpoint (required)")
-		baseURL   = flag.String("base-url", os.Getenv("OPENAI_BASE_URL"), "OpenAI-compatible base URL; defaults to $OPENAI_BASE_URL")
-		keyEnv    = flag.String("key-env", "OPENAI_API_KEY", "environment variable holding the API key")
-		mcpURL    = flag.String("mcp", os.Getenv("THREEGPP_MCP_URL"), "3gpp-mcp streamable HTTP endpoint; defaults to $THREEGPP_MCP_URL ('' disables tools)")
-		dataPath  = flag.String("data", "data/TeleQnA.json", "path to TeleQnA JSON")
-		category  = flag.String("category", "Standards specifications", "category prefix filter")
-		filter    = flag.String("filter", "", "substring the question text must contain (e.g. '3GPP')")
-		n         = flag.Int("n", 10, "number of questions")
-		ids       = flag.String("ids", "", "comma-separated question ids to run (overrides -n/-seed sampling)")
-		seed      = flag.Int64("seed", 42, "sampling seed")
-		workers   = flag.Int("workers", 1, "concurrent questions")
-		maxRounds = flag.Int("max-rounds", 8, "max tool-calling rounds per question")
-		maxTokens = flag.Int("max-tokens", 8192, "max_tokens per completion (0 = provider default)")
-		resultMax = flag.Int("tool-result-max", 16000, "max bytes of a tool result passed to the model")
-		outPath   = flag.String("out", "", "JSONL output path (default results/<model>-<n>q-seed<seed>.jsonl)")
+		model          = flag.String("model", "", "model id on the OpenAI-compatible endpoint (required)")
+		baseURL        = flag.String("base-url", os.Getenv("OPENAI_BASE_URL"), "OpenAI-compatible base URL; defaults to $OPENAI_BASE_URL")
+		keyEnv         = flag.String("key-env", "OPENAI_API_KEY", "environment variable holding the API key")
+		mcpURL         = flag.String("mcp", os.Getenv("THREEGPP_MCP_URL"), "3gpp-mcp streamable HTTP endpoint; defaults to $THREEGPP_MCP_URL ('' disables tools)")
+		dataPath       = flag.String("data", "data/TeleQnA.json", "path to TeleQnA JSON")
+		category       = flag.String("category", "Standards specifications", "category prefix filter")
+		filter         = flag.String("filter", "", "substring the question text must contain (e.g. '3GPP')")
+		n              = flag.Int("n", 10, "number of questions")
+		ids            = flag.String("ids", "", "comma-separated question ids to run (overrides -n/-seed sampling)")
+		seed           = flag.Int64("seed", 42, "sampling seed")
+		workers        = flag.Int("workers", 1, "concurrent questions")
+		maxRounds      = flag.Int("max-rounds", 8, "max tool-calling rounds per question")
+		maxTokens      = flag.Int("max-tokens", 8192, "max_tokens per completion (0 = provider default)")
+		maxTokensField = flag.String("max-tokens-field", "max_tokens", "request field name for the token cap (some providers use max_completion_tokens)")
+		resultMax      = flag.Int("tool-result-max", 16000, "max bytes of a tool result passed to the model")
+		outPath        = flag.String("out", "", "JSONL output path (default results/<model>-<n>q-seed<seed>.jsonl)")
 	)
 	flag.Parse()
 
@@ -462,7 +464,7 @@ func main() {
 		}
 	}
 
-	chat := &chatClient{BaseURL: *baseURL, APIKey: apiKey, Model: *model, MaxTokens: *maxTokens, HTTP: &http.Client{Timeout: 300 * time.Second}}
+	chat := &chatClient{BaseURL: *baseURL, APIKey: apiKey, Model: *model, MaxTokens: *maxTokens, MaxTokensField: *maxTokensField, HTTP: &http.Client{Timeout: 300 * time.Second}}
 
 	var mcp *MCPClient
 	var tools []map[string]any

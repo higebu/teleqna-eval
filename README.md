@@ -156,7 +156,8 @@ summary line on stdout.
 | `-seed` | 42 | Sampling seed — keep it fixed across compared runs |
 | `-workers` | 1 | Concurrent questions |
 | `-max-rounds` | 8 | Tool-calling rounds per question before forcing an answer |
-| `-max-tokens` | 8192 | `max_tokens` per completion (0 = provider default) |
+| `-max-tokens` | 8192 | Token cap per completion (0 = provider default) |
+| `-max-tokens-field` | `max_tokens` | Request field name for the cap (e.g. `max_completion_tokens`) |
 | `-tool-result-max` | 16000 | Max bytes of a tool result passed to the model |
 | `-out` | auto | JSONL output path |
 
