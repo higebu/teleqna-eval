@@ -326,7 +326,12 @@ func (c *chatConvo) step(withTools bool) (*turn, error) {
 		t.Usage = *usage
 	}
 	msg.ReasoningContent = "" // never echo reasoning back
-	c.messages = append(c.messages, *msg)
+	// A reasoning model that spends its whole budget thinking returns empty
+	// content and no tool calls; echoing that back is rejected ("content or
+	// tool_calls must be set"), so drop it and let the answer retry proceed.
+	if msg.Content != "" || len(msg.ToolCalls) > 0 {
+		c.messages = append(c.messages, *msg)
+	}
 	return t, nil
 }
 
