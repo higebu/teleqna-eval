@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -86,6 +87,25 @@ func TestRPCError(t *testing.T) {
 	c := serve(t, `{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"method not found"}}`, nil)
 	if _, _, err := c.CallTool("nope", nil); err == nil || !strings.Contains(err.Error(), "method not found") {
 		t.Errorf("err = %v", err)
+	}
+}
+
+// One Client is shared by every worker, so the request id must be race-free.
+func TestConcurrentCalls(t *testing.T) {
+	c := serve(t, `{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"ok"}]}}`, nil)
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, _, err := c.CallTool("search", nil); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	if got := c.next.Load(); got != 8 {
+		t.Errorf("next = %d, want 8", got)
 	}
 }
 

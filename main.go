@@ -60,6 +60,9 @@ func main() {
 		log.Fatalf("load questions: %v", err)
 	}
 	qs = teleqna.Select(qs, *ids, *n, *seed)
+	if len(qs) == 0 {
+		log.Fatal("no questions matched: check -data, -category, -filter and -ids")
+	}
 
 	var extra map[string]any
 	if *extraBody != "" {

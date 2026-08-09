@@ -190,6 +190,14 @@ func TestRun(t *testing.T) {
 	}
 }
 
+func TestRunZeroWorkers(t *testing.T) {
+	be := &fakeBackend{turns: []*llm.Turn{{Content: "ANSWER: 2"}}}
+	var buf strings.Builder
+	if s := Run(be, nil, []teleqna.Question{question}, Options{MaxRounds: 8, Workers: 0}, &buf); s.Correct != 1 {
+		t.Errorf("summary = %+v", s)
+	}
+}
+
 func TestExtractAnswer(t *testing.T) {
 	tests := []struct {
 		in   string
@@ -198,6 +206,7 @@ func TestExtractAnswer(t *testing.T) {
 		{"reasoning\nANSWER: 3", 3},
 		{"> **ANSWER:** 4", 4},
 		{"ANSWER:2", 2},
+		{"ANSWER：2", 2}, // full-width colon
 		{"ANSWER: option 1", 1},
 		{"the answer: 5 is right", 5},
 		{"option 1 is wrong, option 2 is right", 2},

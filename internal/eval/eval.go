@@ -66,9 +66,11 @@ type ToolCallLog struct {
 	Args string `json:"args"`
 }
 
+// The colon class holds ASCII ":" and full-width "："; models occasionally
+// answer with the latter.
 var (
-	answerLineRe = regexp.MustCompile(`(?mi)^[\s>*#]*ANSWER\s*[::]\s*\**\s*(?:option\s*)?(\d)`)
-	answerAnyRe  = regexp.MustCompile(`(?i)ANSWER\s*[::]\s*\**\s*(?:option\s*)?(\d)`)
+	answerLineRe = regexp.MustCompile(`(?mi)^[\s>*#]*ANSWER\s*[:：]\s*\**\s*(?:option\s*)?(\d)`)
+	answerAnyRe  = regexp.MustCompile(`(?i)ANSWER\s*[:：]\s*\**\s*(?:option\s*)?(\d)`)
 	optionAnyRe  = regexp.MustCompile(`(?i)\boption\s*(\d)\b`)
 )
 

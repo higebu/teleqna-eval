@@ -10,13 +10,14 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
 type Client struct {
 	URL  string
 	HTTP *http.Client
-	next int
+	next atomic.Int64 // request id; one Client is shared by all workers
 }
 
 func New(url string, timeout time.Duration) *Client {
@@ -30,9 +31,8 @@ type Tool struct {
 }
 
 func (c *Client) rpc(method string, params any) (json.RawMessage, error) {
-	c.next++
 	body, _ := json.Marshal(map[string]any{
-		"jsonrpc": "2.0", "id": c.next, "method": method, "params": params,
+		"jsonrpc": "2.0", "id": c.next.Add(1), "method": method, "params": params,
 	})
 	req, _ := http.NewRequest("POST", c.URL, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")

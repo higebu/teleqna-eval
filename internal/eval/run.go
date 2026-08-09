@@ -32,7 +32,8 @@ func Run(be llm.Backend, mcp ToolCaller, qs []teleqna.Question, opts Options, ou
 		wg   sync.WaitGroup
 	)
 	jobs := make(chan teleqna.Question)
-	for w := 0; w < opts.Workers; w++ {
+	workers := max(opts.Workers, 1) // 0 workers would block on the first send
+	for w := 0; w < workers; w++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
