@@ -147,11 +147,15 @@ is special-cased.
 ./eval -model gpt-5.2 -filter 3GPP -n 1509 -seed 42 -workers 8 -mcp ''
 
 # Other OpenAI-compatible providers are just a different base URL + key:
-./eval -base-url https://api.anthropic.com/v1 -key-env ANTHROPIC_API_KEY -model claude-sonnet-5 ...
+./eval -base-url https://api.deepseek.com/v1 -key-env DEEPSEEK_API_KEY -model deepseek-v4-flash ...
 
 # OpenAI Platform reasoning models reject function tools on chat/completions
 # unless reasoning is disabled; use the Responses API backend instead:
 ./eval -api responses -base-url https://api.openai.com/v1 -model gpt-5.6-luna ...
+
+# Claude models: the OpenAI-compatible endpoint does not support prompt
+# caching, so use the native Messages API backend:
+./eval -api anthropic -base-url https://api.anthropic.com/v1 -key-env ANTHROPIC_API_KEY -model claude-sonnet-5 ...
 ```
 
 The scripts in [`examples/`](examples/) (`run_{platform}_{model}.sh`)
@@ -165,7 +169,7 @@ summary line on stdout.
 | Flag | Default | Description |
 |---|---|---|
 | `-model` | (required) | Model ID on the chat endpoint |
-| `-api` | `chat` | `chat` (chat/completions) or `responses` (OpenAI Responses API) |
+| `-api` | `chat` | `chat` (chat/completions), `responses` (OpenAI Responses API) or `anthropic` (Anthropic Messages API) |
 | `-base-url` | `$OPENAI_BASE_URL` | OpenAI-compatible base URL |
 | `-key-env` | `OPENAI_API_KEY` | Name of the environment variable holding the API key |
 | `-mcp` | `$THREEGPP_MCP_URL` | Streamable HTTP MCP endpoint; `''` disables tools |
@@ -177,7 +181,7 @@ summary line on stdout.
 | `-seed` | 42 | Sampling seed — keep it fixed across compared runs |
 | `-workers` | 1 | Concurrent questions |
 | `-max-rounds` | 8 | Tool-calling rounds per question before forcing an answer |
-| `-max-tokens` | 8192 | Token cap per completion (0 = provider default) |
+| `-max-tokens` | 8192 | Token cap per completion (0 = provider default, or the model's ceiling on `-api anthropic`) |
 | `-max-tokens-field` | `max_tokens` | Request field name for the cap (e.g. `max_completion_tokens`) |
 | `-http-timeout` | 300 | Per-request timeout in seconds; raise it when running without a token cap |
 | `-tool-result-max` | 16000 | Max bytes of a tool result passed to the model |

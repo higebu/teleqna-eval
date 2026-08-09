@@ -195,8 +195,21 @@ type toolCall struct {
 }
 
 type chatUsage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
+	PromptTokens        int `json:"prompt_tokens"`
+	CompletionTokens    int `json:"completion_tokens"`
+	PromptTokensDetails struct {
+		CachedTokens int `json:"cached_tokens"`
+	} `json:"prompt_tokens_details"`
+}
+
+// usage is one step's token accounting, backend-independent. Prompt is always
+// the full prompt size: OpenAI reports cached tokens inside its input count,
+// Anthropic reports them alongside it, so the Anthropic backend adds them up.
+type usage struct {
+	Prompt     int
+	Completion int
+	CacheRead  int // prompt tokens served from cache
+	CacheWrite int // prompt tokens written to cache (Anthropic/OpenAI charge a premium)
 }
 
 type chatClient struct {
@@ -207,9 +220,13 @@ type chatClient struct {
 	HTTP                   *http.Client
 }
 
-// postJSON POSTs a JSON body with Bearer auth, retrying 429/5xx and network
-// errors with exponential backoff, and returns the response body.
-func postJSON(httpc *http.Client, url, apiKey string, reqBody map[string]any) ([]byte, error) {
+func bearer(apiKey string) map[string]string {
+	return map[string]string{"Authorization": "Bearer " + apiKey}
+}
+
+// postJSON POSTs a JSON body with the given auth headers, retrying 429/5xx and
+// network errors with exponential backoff, and returns the response body.
+func postJSON(httpc *http.Client, url string, headers map[string]string, reqBody map[string]any) ([]byte, error) {
 	body, _ := json.Marshal(reqBody)
 	var lastErr error
 	for attempt := 0; attempt < 5; attempt++ {
@@ -218,7 +235,9 @@ func postJSON(httpc *http.Client, url, apiKey string, reqBody map[string]any) ([
 		}
 		req, _ := http.NewRequest("POST", url, bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+apiKey)
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
 		resp, err := httpc.Do(req)
 		if err != nil {
 			lastErr = err
@@ -254,7 +273,7 @@ func (c *chatClient) complete(messages []chatMessage, tools []map[string]any) (*
 		reqBody["tools"] = tools
 		reqBody["tool_choice"] = "auto"
 	}
-	data, err := postJSON(c.HTTP, c.BaseURL+"/chat/completions", c.APIKey, reqBody)
+	data, err := postJSON(c.HTTP, c.BaseURL+"/chat/completions", bearer(c.APIKey), reqBody)
 	if err != nil {
 		return nil, nil, fmt.Errorf("chat: %w", err)
 	}
@@ -280,7 +299,7 @@ type turn struct {
 	Content   string
 	Reasoning string
 	ToolCalls []toolCall
-	Usage     chatUsage
+	Usage     usage
 }
 
 // convo is one question's conversation with a model; each backend keeps the
@@ -317,13 +336,14 @@ func (c *chatConvo) step(withTools bool) (*turn, error) {
 	if withTools {
 		tools = c.b.tools
 	}
-	msg, usage, err := c.b.client.complete(c.messages, tools)
+	msg, u, err := c.b.client.complete(c.messages, tools)
 	if err != nil {
 		return nil, err
 	}
 	t := &turn{Content: msg.Content, Reasoning: msg.ReasoningContent, ToolCalls: msg.ToolCalls}
-	if usage != nil {
-		t.Usage = *usage
+	if u != nil {
+		t.Usage = usage{Prompt: u.PromptTokens, Completion: u.CompletionTokens,
+			CacheRead: u.PromptTokensDetails.CachedTokens}
 	}
 	msg.ReasoningContent = "" // never echo reasoning back
 	// A reasoning model that spends its whole budget thinking returns empty
@@ -400,7 +420,7 @@ func (c *respConvo) step(withTools bool) (*turn, error) {
 		reqBody["tools"] = c.b.tools
 		reqBody["tool_choice"] = "auto"
 	}
-	data, err := postJSON(cl.HTTP, cl.BaseURL+"/responses", cl.APIKey, reqBody)
+	data, err := postJSON(cl.HTTP, cl.BaseURL+"/responses", bearer(cl.APIKey), reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("responses: %w", err)
 	}
@@ -408,14 +428,24 @@ func (c *respConvo) step(withTools bool) (*turn, error) {
 		Status string            `json:"status"`
 		Output []json.RawMessage `json:"output"`
 		Usage  struct {
-			InputTokens  int `json:"input_tokens"`
-			OutputTokens int `json:"output_tokens"`
+			InputTokens       int `json:"input_tokens"`
+			OutputTokens      int `json:"output_tokens"`
+			InputTokenDetails struct {
+				CachedTokens     int `json:"cached_tokens"`
+				CacheWriteTokens int `json:"cache_write_tokens"`
+			} `json:"input_tokens_details"`
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(data, &out); err != nil {
 		return nil, fmt.Errorf("responses: bad response: %.300s", data)
 	}
-	t := &turn{Usage: chatUsage{PromptTokens: out.Usage.InputTokens, CompletionTokens: out.Usage.OutputTokens}}
+	// OpenAI caches automatically; input_tokens already includes the cached
+	// prefix, so the details are recorded but not added to the total.
+	t := &turn{Usage: usage{
+		Prompt: out.Usage.InputTokens, Completion: out.Usage.OutputTokens,
+		CacheRead:  out.Usage.InputTokenDetails.CachedTokens,
+		CacheWrite: out.Usage.InputTokenDetails.CacheWriteTokens,
+	}}
 	for _, raw := range out.Output {
 		var item map[string]any
 		if err := json.Unmarshal(raw, &item); err != nil {
@@ -453,6 +483,204 @@ func (c *respConvo) step(withTools bool) (*turn, error) {
 	}
 	if out.Status == "incomplete" && t.Content == "" && len(t.ToolCalls) == 0 {
 		return nil, fmt.Errorf("responses: incomplete with no usable output: %.300s", data)
+	}
+	return t, nil
+}
+
+// ---------- Anthropic Messages API ----------
+
+// Prompt caching is only available on the native Messages API: the
+// OpenAI-compatible endpoint documents "Prompt caching is not supported", and
+// its usage.prompt_tokens_details is always empty, so a chat-completions run
+// pays full price for every re-sent tool result.
+const anthropicVersion = "2023-06-01"
+
+type anthropicClient struct {
+	BaseURL, APIKey, Model string
+	MaxTokens              int
+	Extra                  map[string]any
+	HTTP                   *http.Client
+}
+
+func (c *anthropicClient) headers() map[string]string {
+	return map[string]string{"x-api-key": c.APIKey, "anthropic-version": anthropicVersion}
+}
+
+// maxOutputTokens asks the Models API for the model's output ceiling. The
+// Messages API requires max_tokens, so "-max-tokens 0" (no cap) means "as many
+// as this model allows".
+func (c *anthropicClient) maxOutputTokens() (int, error) {
+	req, _ := http.NewRequest("GET", c.BaseURL+"/models/"+c.Model, nil)
+	for k, v := range c.headers() {
+		req.Header.Set(k, v)
+	}
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, err
+	}
+	var out struct {
+		MaxTokens int `json:"max_tokens"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil || out.MaxTokens == 0 {
+		return 0, fmt.Errorf("models/%s: %.200s", c.Model, data)
+	}
+	return out.MaxTokens, nil
+}
+
+type anthropicBackend struct {
+	client *anthropicClient
+	tools  []map[string]any
+}
+
+func (b *anthropicBackend) newConvo(system, user string) convo {
+	// Tools render before system, so a single breakpoint on the system block
+	// caches the tool definitions and the system prompt together — the prefix
+	// every question shares. (Below the model's minimum cacheable prefix it is
+	// silently a no-op, which is the case for the no-tools baseline.)
+	return &anthConvo{b: b,
+		system: []any{map[string]any{
+			"type": "text", "text": system,
+			"cache_control": map[string]any{"type": "ephemeral"},
+		}},
+		messages: []map[string]any{{
+			"role":    "user",
+			"content": []any{map[string]any{"type": "text", "text": user}},
+		}},
+	}
+}
+
+// anthConvo keeps the history in Anthropic block form. Assistant content blocks
+// are echoed back verbatim so thinking blocks survive the tool round-trip.
+type anthConvo struct {
+	b        *anthropicBackend
+	system   []any
+	messages []map[string]any
+	marks    []map[string]any // blocks currently carrying cache_control
+}
+
+// appendUserBlock merges into the trailing user message when there is one:
+// all tool results of a round belong to a single user turn.
+func (c *anthConvo) appendUserBlock(block map[string]any) {
+	if len(c.messages) > 0 {
+		last := c.messages[len(c.messages)-1]
+		if blocks, ok := last["content"].([]any); ok && last["role"] == "user" {
+			last["content"] = append(blocks, block)
+			return
+		}
+	}
+	c.messages = append(c.messages, map[string]any{"role": "user", "content": []any{block}})
+}
+
+func (c *anthConvo) addUser(text string) {
+	c.appendUserBlock(map[string]any{"type": "text", "text": text})
+}
+
+func (c *anthConvo) addToolResult(tc toolCall, content string) {
+	c.appendUserBlock(map[string]any{
+		"type": "tool_result", "tool_use_id": tc.ID, "content": content,
+	})
+}
+
+// markLatest keeps a rolling cache breakpoint on the newest content block, so
+// each round reads the prefix the previous round wrote. Two markers are kept:
+// a breakpoint only walks back 20 blocks looking for a cache entry, and one
+// round of parallel tool calls can add more blocks than that.
+func (c *anthConvo) markLatest() {
+	if len(c.messages) == 0 {
+		return
+	}
+	blocks, ok := c.messages[len(c.messages)-1]["content"].([]any)
+	if !ok || len(blocks) == 0 {
+		return
+	}
+	blk, ok := blocks[len(blocks)-1].(map[string]any)
+	if !ok {
+		return
+	}
+	if _, marked := blk["cache_control"]; marked {
+		return
+	}
+	blk["cache_control"] = map[string]any{"type": "ephemeral"}
+	c.marks = append(c.marks, blk)
+	for len(c.marks) > 2 {
+		delete(c.marks[0], "cache_control")
+		c.marks = c.marks[1:]
+	}
+}
+
+func (c *anthConvo) step(withTools bool) (*turn, error) {
+	cl := c.b.client
+	c.markLatest()
+	reqBody := map[string]any{
+		"model":      cl.Model,
+		"max_tokens": cl.MaxTokens,
+		"system":     c.system,
+		"messages":   c.messages,
+	}
+	for k, v := range cl.Extra {
+		reqBody[k] = v
+	}
+	if withTools && len(c.b.tools) > 0 {
+		reqBody["tools"] = c.b.tools
+		reqBody["tool_choice"] = map[string]any{"type": "auto"}
+	}
+	data, err := postJSON(cl.HTTP, cl.BaseURL+"/messages", cl.headers(), reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("messages: %w", err)
+	}
+	var out struct {
+		Content    []json.RawMessage `json:"content"`
+		StopReason string            `json:"stop_reason"`
+		Usage      struct {
+			InputTokens              int `json:"input_tokens"`
+			OutputTokens             int `json:"output_tokens"`
+			CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+			CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, fmt.Errorf("messages: bad response: %.300s", data)
+	}
+	// input_tokens is the uncached remainder only; the prompt total is the sum.
+	t := &turn{Usage: usage{
+		Prompt:     out.Usage.InputTokens + out.Usage.CacheCreationInputTokens + out.Usage.CacheReadInputTokens,
+		Completion: out.Usage.OutputTokens,
+		CacheRead:  out.Usage.CacheReadInputTokens,
+		CacheWrite: out.Usage.CacheCreationInputTokens,
+	}}
+	for _, raw := range out.Content {
+		var blk struct {
+			Type  string          `json:"type"`
+			Text  string          `json:"text"`
+			ID    string          `json:"id"`
+			Name  string          `json:"name"`
+			Input json.RawMessage `json:"input"`
+		}
+		if err := json.Unmarshal(raw, &blk); err != nil {
+			return nil, fmt.Errorf("messages: bad content block: %.300s", raw)
+		}
+		switch blk.Type {
+		case "text":
+			t.Content += blk.Text
+		case "tool_use":
+			var tc toolCall
+			tc.ID = blk.ID
+			tc.Type = "function"
+			tc.Function.Name = blk.Name
+			tc.Function.Arguments = string(blk.Input)
+			t.ToolCalls = append(t.ToolCalls, tc)
+		}
+	}
+	// A turn that spent its whole budget thinking comes back with no content;
+	// echoing an empty assistant message is rejected, so drop it and let the
+	// answer retry proceed.
+	if len(out.Content) > 0 {
+		c.messages = append(c.messages, map[string]any{"role": "assistant", "content": out.Content})
 	}
 	return t, nil
 }
@@ -505,19 +733,21 @@ type toolCallLog struct {
 }
 
 type result struct {
-	ID           string        `json:"id"`
-	Category     string        `json:"category"`
-	Question     string        `json:"question"`
-	Expected     int           `json:"expected"`
-	Predicted    int           `json:"predicted"`
-	Correct      bool          `json:"correct"`
-	Rounds       int           `json:"rounds"`
-	ToolCalls    []toolCallLog `json:"tool_calls"`
-	PromptTok    int           `json:"prompt_tokens"`
-	CompleteTok  int           `json:"completion_tokens"`
-	DurationSec  float64       `json:"duration_sec"`
-	FinalMessage string        `json:"final_message"`
-	Error        string        `json:"error,omitempty"`
+	ID            string        `json:"id"`
+	Category      string        `json:"category"`
+	Question      string        `json:"question"`
+	Expected      int           `json:"expected"`
+	Predicted     int           `json:"predicted"`
+	Correct       bool          `json:"correct"`
+	Rounds        int           `json:"rounds"`
+	ToolCalls     []toolCallLog `json:"tool_calls"`
+	PromptTok     int           `json:"prompt_tokens"`
+	CompleteTok   int           `json:"completion_tokens"`
+	CacheReadTok  int           `json:"cache_read_tokens"`
+	CacheWriteTok int           `json:"cache_write_tokens"`
+	DurationSec   float64       `json:"duration_sec"`
+	FinalMessage  string        `json:"final_message"`
+	Error         string        `json:"error,omitempty"`
 }
 
 func formatQuestion(q Question) string {
@@ -564,8 +794,10 @@ func evalOne(be backend, mcp *MCPClient, q Question, maxRounds, toolResultMax in
 			r.Error = err.Error()
 			break
 		}
-		r.PromptTok += t.Usage.PromptTokens
-		r.CompleteTok += t.Usage.CompletionTokens
+		r.PromptTok += t.Usage.Prompt
+		r.CompleteTok += t.Usage.Completion
+		r.CacheReadTok += t.Usage.CacheRead
+		r.CacheWriteTok += t.Usage.CacheWrite
 		if len(t.ToolCalls) == 0 {
 			pred := extractAnswer(t.Content)
 			if pred == 0 {
@@ -599,7 +831,7 @@ func evalOne(be backend, mcp *MCPClient, q Question, maxRounds, toolResultMax in
 func main() {
 	var (
 		model          = flag.String("model", "", "model id on the OpenAI-compatible endpoint (required)")
-		api            = flag.String("api", "chat", "API style: 'chat' (chat/completions) or 'responses' (OpenAI Responses API)")
+		api            = flag.String("api", "chat", "API style: 'chat' (chat/completions), 'responses' (OpenAI Responses API) or 'anthropic' (Anthropic Messages API)")
 		baseURL        = flag.String("base-url", os.Getenv("OPENAI_BASE_URL"), "OpenAI-compatible base URL; defaults to $OPENAI_BASE_URL")
 		keyEnv         = flag.String("key-env", "OPENAI_API_KEY", "environment variable holding the API key")
 		mcpURL         = flag.String("mcp", os.Getenv("THREEGPP_MCP_URL"), "3gpp-mcp streamable HTTP endpoint; defaults to $THREEGPP_MCP_URL ('' disables tools)")
@@ -669,14 +901,19 @@ func main() {
 			log.Fatalf("mcp tools/list: %v", err)
 		}
 		for _, t := range mcpTools {
-			if *api == "responses" {
+			switch *api {
+			case "responses":
 				// Responses API uses a flat tool shape; strict mode is
 				// attempted by default, so disable it for MCP schemas.
 				tools = append(tools, map[string]any{
 					"type": "function", "name": t.Name, "description": t.Description,
 					"parameters": t.InputSchema, "strict": false,
 				})
-			} else {
+			case "anthropic":
+				tools = append(tools, map[string]any{
+					"name": t.Name, "description": t.Description, "input_schema": t.InputSchema,
+				})
+			default:
 				tools = append(tools, map[string]any{
 					"type": "function",
 					"function": map[string]any{
@@ -701,8 +938,23 @@ func main() {
 			BaseURL: *baseURL, APIKey: apiKey, Model: *model,
 			MaxTokens: *maxTokens, Extra: extra, HTTP: httpc,
 		}}
+	case "anthropic":
+		cl := &anthropicClient{
+			BaseURL: *baseURL, APIKey: apiKey, Model: *model,
+			MaxTokens: *maxTokens, Extra: extra, HTTP: httpc,
+		}
+		if cl.MaxTokens == 0 {
+			// max_tokens is mandatory here, so ask the model for its ceiling.
+			max, err := cl.maxOutputTokens()
+			if err != nil {
+				log.Fatalf("-max-tokens 0 needs the model's output ceiling: %v", err)
+			}
+			cl.MaxTokens = max
+			log.Printf("max_tokens=%d (%s ceiling)", max, *model)
+		}
+		be = &anthropicBackend{tools: tools, client: cl}
 	default:
-		log.Fatalf("-api must be 'chat' or 'responses', got %q", *api)
+		log.Fatalf("-api must be 'chat', 'responses' or 'anthropic', got %q", *api)
 	}
 
 	if *outPath == "" {
@@ -727,8 +979,9 @@ func main() {
 	enc := json.NewEncoder(out)
 
 	var (
-		mu                                                              sync.Mutex
-		correct, answered, totalPrompt, totalComplete, totalCalls, done int
+		mu                                                sync.Mutex
+		correct, answered, totalCalls, done               int
+		totalPrompt, totalComplete, totalRead, totalWrite int
 	)
 	type job struct {
 		idx int
@@ -757,6 +1010,8 @@ func main() {
 				}
 				totalPrompt += r.PromptTok
 				totalComplete += r.CompleteTok
+				totalRead += r.CacheReadTok
+				totalWrite += r.CacheWriteTok
 				totalCalls += len(r.ToolCalls)
 				done++
 				log.Printf("[%d/%d] %s: pred=%d exp=%d %s (%d tool calls, %.0fs)",
@@ -774,5 +1029,9 @@ func main() {
 		*model, mcp != nil, len(qs), answered, correct, 100*float64(correct)/float64(len(qs)))
 	fmt.Printf("tokens: prompt=%d completion=%d, tool calls=%d (avg %.1f/question)\n",
 		totalPrompt, totalComplete, totalCalls, float64(totalCalls)/float64(len(qs)))
+	if totalPrompt > 0 {
+		fmt.Printf("cache: read=%d (%.0f%% of prompt) write=%d\n",
+			totalRead, 100*float64(totalRead)/float64(totalPrompt), totalWrite)
+	}
 	fmt.Printf("results: %s\n", *outPath)
 }

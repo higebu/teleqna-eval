@@ -1,12 +1,14 @@
 #!/bin/bash
-# Claude Sonnet 5 on the Anthropic OpenAI-compatible endpoint: full 3GPP pool pair.
+# Claude Sonnet 5 on the Anthropic Messages API: full 3GPP pool pair.
+# The published numbers were measured on the OpenAI-compatible endpoint,
+# before this backend existed; -api anthropic additionally caches the prefix.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 : "${ANTHROPIC_API_KEY:?set ANTHROPIC_API_KEY}"
 : "${THREEGPP_MCP_URL:?set THREEGPP_MCP_URL (3gpp-mcp streamable HTTP endpoint)}"
 
 MODEL=claude-sonnet-5
-COMMON=(-base-url https://api.anthropic.com/v1 -key-env ANTHROPIC_API_KEY -model "$MODEL"
+COMMON=(-api anthropic -base-url https://api.anthropic.com/v1 -key-env ANTHROPIC_API_KEY -model "$MODEL"
   -filter 3GPP -n 1509 -seed 42 -workers 8
   -max-tokens 0 -max-rounds 20 -http-timeout 900)
 
