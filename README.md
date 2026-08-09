@@ -132,6 +132,10 @@ is special-cased.
 
 # Other OpenAI-compatible providers are just a different base URL + key:
 ./eval -base-url https://api.anthropic.com/v1 -key-env ANTHROPIC_API_KEY -model claude-sonnet-5 ...
+
+# OpenAI Platform reasoning models reject function tools on chat/completions
+# unless reasoning is disabled; use the Responses API backend instead:
+./eval -api responses -base-url https://api.openai.com/v1 -model gpt-5.6-luna ...
 ```
 
 The scripts in [`examples/`](examples/) (`run_{platform}_{model}.sh`)
@@ -145,6 +149,7 @@ summary line on stdout.
 | Flag | Default | Description |
 |---|---|---|
 | `-model` | (required) | Model ID on the chat endpoint |
+| `-api` | `chat` | `chat` (chat/completions) or `responses` (OpenAI Responses API) |
 | `-base-url` | `$OPENAI_BASE_URL` | OpenAI-compatible base URL |
 | `-key-env` | `OPENAI_API_KEY` | Name of the environment variable holding the API key |
 | `-mcp` | `$THREEGPP_MCP_URL` | Streamable HTTP MCP endpoint; `''` disables tools |

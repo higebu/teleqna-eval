@@ -202,29 +202,24 @@ type chatUsage struct {
 type chatClient struct {
 	BaseURL, APIKey, Model string
 	MaxTokens              int
-	MaxTokensField         string // "max_tokens", or "max_completion_tokens" for newer OpenAI models
+	MaxTokensField         string         // "max_tokens", or "max_completion_tokens" for newer OpenAI models
+	Extra                  map[string]any // extra request fields, e.g. {"reasoning_effort": "none"}
 	HTTP                   *http.Client
 }
 
-func (c *chatClient) complete(messages []chatMessage, tools []map[string]any) (*chatMessage, *chatUsage, error) {
-	reqBody := map[string]any{"model": c.Model, "messages": messages}
-	if c.MaxTokens > 0 {
-		reqBody[c.MaxTokensField] = c.MaxTokens
-	}
-	if len(tools) > 0 {
-		reqBody["tools"] = tools
-		reqBody["tool_choice"] = "auto"
-	}
+// postJSON POSTs a JSON body with Bearer auth, retrying 429/5xx and network
+// errors with exponential backoff, and returns the response body.
+func postJSON(httpc *http.Client, url, apiKey string, reqBody map[string]any) ([]byte, error) {
 	body, _ := json.Marshal(reqBody)
 	var lastErr error
 	for attempt := 0; attempt < 5; attempt++ {
 		if attempt > 0 {
 			time.Sleep(time.Duration(1<<attempt) * 2 * time.Second)
 		}
-		req, _ := http.NewRequest("POST", c.BaseURL+"/chat/completions", bytes.NewReader(body))
+		req, _ := http.NewRequest("POST", url, bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+c.APIKey)
-		resp, err := c.HTTP.Do(req)
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+		resp, err := httpc.Do(req)
 		if err != nil {
 			lastErr = err
 			continue
@@ -236,27 +231,225 @@ func (c *chatClient) complete(messages []chatMessage, tools []map[string]any) (*
 			continue
 		}
 		if resp.StatusCode == 429 || resp.StatusCode >= 500 {
-			lastErr = fmt.Errorf("chat: HTTP %d: %.300s", resp.StatusCode, data)
+			lastErr = fmt.Errorf("HTTP %d: %.300s", resp.StatusCode, data)
 			continue
 		}
 		if resp.StatusCode != 200 {
-			return nil, nil, fmt.Errorf("chat: HTTP %d: %.500s", resp.StatusCode, data)
+			return nil, fmt.Errorf("HTTP %d: %.500s", resp.StatusCode, data)
 		}
-		var out struct {
-			Choices []struct {
-				Message chatMessage `json:"message"`
-			} `json:"choices"`
-			Usage chatUsage `json:"usage"`
-		}
-		if err := json.Unmarshal(data, &out); err != nil {
-			return nil, nil, fmt.Errorf("chat: bad response: %.300s", data)
-		}
-		if len(out.Choices) == 0 {
-			return nil, nil, fmt.Errorf("chat: no choices: %.300s", data)
-		}
-		return &out.Choices[0].Message, &out.Usage, nil
+		return data, nil
 	}
-	return nil, nil, lastErr
+	return nil, lastErr
+}
+
+func (c *chatClient) complete(messages []chatMessage, tools []map[string]any) (*chatMessage, *chatUsage, error) {
+	reqBody := map[string]any{"model": c.Model, "messages": messages}
+	if c.MaxTokens > 0 {
+		reqBody[c.MaxTokensField] = c.MaxTokens
+	}
+	for k, v := range c.Extra {
+		reqBody[k] = v
+	}
+	if len(tools) > 0 {
+		reqBody["tools"] = tools
+		reqBody["tool_choice"] = "auto"
+	}
+	data, err := postJSON(c.HTTP, c.BaseURL+"/chat/completions", c.APIKey, reqBody)
+	if err != nil {
+		return nil, nil, fmt.Errorf("chat: %w", err)
+	}
+	var out struct {
+		Choices []struct {
+			Message chatMessage `json:"message"`
+		} `json:"choices"`
+		Usage chatUsage `json:"usage"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, nil, fmt.Errorf("chat: bad response: %.300s", data)
+	}
+	if len(out.Choices) == 0 {
+		return nil, nil, fmt.Errorf("chat: no choices: %.300s", data)
+	}
+	return &out.Choices[0].Message, &out.Usage, nil
+}
+
+// ---------- backend abstraction ----------
+
+// turn is one assistant step, backend-independent.
+type turn struct {
+	Content   string
+	Reasoning string
+	ToolCalls []toolCall
+	Usage     chatUsage
+}
+
+// convo is one question's conversation with a model; each backend keeps the
+// history in its own wire format.
+type convo interface {
+	step(withTools bool) (*turn, error)
+	addUser(text string)
+	addToolResult(tc toolCall, content string)
+}
+
+type backend interface {
+	newConvo(system, user string) convo
+}
+
+type chatBackend struct {
+	client *chatClient
+	tools  []map[string]any
+}
+
+func (b *chatBackend) newConvo(system, user string) convo {
+	return &chatConvo{b: b, messages: []chatMessage{
+		{Role: "system", Content: system},
+		{Role: "user", Content: user},
+	}}
+}
+
+type chatConvo struct {
+	b        *chatBackend
+	messages []chatMessage
+}
+
+func (c *chatConvo) step(withTools bool) (*turn, error) {
+	var tools []map[string]any
+	if withTools {
+		tools = c.b.tools
+	}
+	msg, usage, err := c.b.client.complete(c.messages, tools)
+	if err != nil {
+		return nil, err
+	}
+	t := &turn{Content: msg.Content, Reasoning: msg.ReasoningContent, ToolCalls: msg.ToolCalls}
+	if usage != nil {
+		t.Usage = *usage
+	}
+	msg.ReasoningContent = "" // never echo reasoning back
+	c.messages = append(c.messages, *msg)
+	return t, nil
+}
+
+func (c *chatConvo) addUser(text string) {
+	c.messages = append(c.messages, chatMessage{Role: "user", Content: text})
+}
+
+func (c *chatConvo) addToolResult(tc toolCall, content string) {
+	c.messages = append(c.messages, chatMessage{Role: "tool", ToolCallID: tc.ID, Content: content})
+}
+
+// ---------- OpenAI Responses API ----------
+
+type responsesClient struct {
+	BaseURL, APIKey, Model string
+	MaxTokens              int
+	Extra                  map[string]any
+	HTTP                   *http.Client
+}
+
+type responsesBackend struct {
+	client *responsesClient
+	tools  []map[string]any
+}
+
+func (b *responsesBackend) newConvo(system, user string) convo {
+	return &respConvo{b: b, instructions: system,
+		input: []any{map[string]any{"role": "user", "content": user}}}
+}
+
+// respConvo replays the full item history on every request (store:false).
+// Output items — including reasoning items with encrypted_content — are
+// echoed back verbatim, as the migration guide requires for stateless use.
+type respConvo struct {
+	b            *responsesBackend
+	instructions string
+	input        []any
+}
+
+func (c *respConvo) addUser(text string) {
+	c.input = append(c.input, map[string]any{"role": "user", "content": text})
+}
+
+func (c *respConvo) addToolResult(tc toolCall, content string) {
+	c.input = append(c.input, map[string]any{
+		"type": "function_call_output", "call_id": tc.ID, "output": content,
+	})
+}
+
+func (c *respConvo) step(withTools bool) (*turn, error) {
+	cl := c.b.client
+	reqBody := map[string]any{
+		"model":        cl.Model,
+		"instructions": c.instructions,
+		"input":        c.input,
+		"store":        false,
+		"include":      []string{"reasoning.encrypted_content"},
+	}
+	if cl.MaxTokens > 0 {
+		reqBody["max_output_tokens"] = cl.MaxTokens
+	}
+	for k, v := range cl.Extra {
+		reqBody[k] = v
+	}
+	if withTools && len(c.b.tools) > 0 {
+		reqBody["tools"] = c.b.tools
+		reqBody["tool_choice"] = "auto"
+	}
+	data, err := postJSON(cl.HTTP, cl.BaseURL+"/responses", cl.APIKey, reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("responses: %w", err)
+	}
+	var out struct {
+		Status string            `json:"status"`
+		Output []json.RawMessage `json:"output"`
+		Usage  struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, fmt.Errorf("responses: bad response: %.300s", data)
+	}
+	t := &turn{Usage: chatUsage{PromptTokens: out.Usage.InputTokens, CompletionTokens: out.Usage.OutputTokens}}
+	for _, raw := range out.Output {
+		var item map[string]any
+		if err := json.Unmarshal(raw, &item); err != nil {
+			return nil, fmt.Errorf("responses: bad output item: %.300s", raw)
+		}
+		c.input = append(c.input, item) // echo every item back next round
+		switch item["type"] {
+		case "message":
+			var m struct {
+				Content []struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				} `json:"content"`
+			}
+			_ = json.Unmarshal(raw, &m)
+			for _, blk := range m.Content {
+				if blk.Type == "output_text" {
+					t.Content += blk.Text
+				}
+			}
+		case "function_call":
+			var f struct {
+				CallID    string `json:"call_id"`
+				Name      string `json:"name"`
+				Arguments string `json:"arguments"`
+			}
+			_ = json.Unmarshal(raw, &f)
+			var tc toolCall
+			tc.ID = f.CallID
+			tc.Type = "function"
+			tc.Function.Name = f.Name
+			tc.Function.Arguments = f.Arguments
+			t.ToolCalls = append(t.ToolCalls, tc)
+		}
+	}
+	if out.Status == "incomplete" && t.Content == "" && len(t.ToolCalls) == 0 {
+		return nil, fmt.Errorf("responses: incomplete with no usable output: %.300s", data)
+	}
+	return t, nil
 }
 
 // ---------- Evaluation ----------
@@ -344,55 +537,45 @@ func truncate(s string, max int) string {
 	return s[:max] + fmt.Sprintf("\n...[truncated %d bytes; refine the query or use offset to read more]", len(s)-max)
 }
 
-func evalOne(chat *chatClient, mcp *MCPClient, tools []map[string]any, q Question, maxRounds, toolResultMax int) result {
+func evalOne(be backend, mcp *MCPClient, q Question, maxRounds, toolResultMax int) result {
 	start := time.Now()
 	r := result{ID: q.ID, Category: q.Category, Question: q.Text, Expected: q.Answer}
 	sys := systemPrompt
 	if mcp == nil {
 		sys = systemPromptNoTools
 	}
-	messages := []chatMessage{
-		{Role: "system", Content: sys},
-		{Role: "user", Content: formatQuestion(q)},
-	}
+	c := be.newConvo(sys, formatQuestion(q))
 	answerRetries := 0
 	for round := 0; ; round++ {
 		r.Rounds = round + 1
-		activeTools := tools
+		withTools := mcp != nil
 		if round >= maxRounds {
 			// Force a final answer: drop tools and ask for the answer.
-			activeTools = nil
-			messages = append(messages, chatMessage{Role: "user",
-				Content: "Tool budget exhausted. Based on what you have read so far, give your final answer now as 'ANSWER: <option number>'."})
+			withTools = false
+			c.addUser("Tool budget exhausted. Based on what you have read so far, give your final answer now as 'ANSWER: <option number>'.")
 		}
-		msg, usage, err := chat.complete(messages, activeTools)
+		t, err := c.step(withTools)
 		if err != nil {
 			r.Error = err.Error()
 			break
 		}
-		if usage != nil {
-			r.PromptTok += usage.PromptTokens
-			r.CompleteTok += usage.CompletionTokens
-		}
-		reasoning := msg.ReasoningContent
-		msg.ReasoningContent = "" // never echo reasoning back
-		messages = append(messages, *msg)
-		if len(msg.ToolCalls) == 0 {
-			pred := extractAnswer(msg.Content)
+		r.PromptTok += t.Usage.PromptTokens
+		r.CompleteTok += t.Usage.CompletionTokens
+		if len(t.ToolCalls) == 0 {
+			pred := extractAnswer(t.Content)
 			if pred == 0 {
-				pred = extractAnswer(reasoning)
+				pred = extractAnswer(t.Reasoning)
 			}
 			if pred == 0 && answerRetries < 2 {
 				answerRetries++
-				messages = append(messages, chatMessage{Role: "user",
-					Content: "Your reply did not contain a readable answer. Reply now with one line only: ANSWER: <option number>"})
+				c.addUser("Your reply did not contain a readable answer. Reply now with one line only: ANSWER: <option number>")
 				continue
 			}
-			r.FinalMessage = msg.Content
+			r.FinalMessage = t.Content
 			r.Predicted = pred
 			break
 		}
-		for _, tc := range msg.ToolCalls {
+		for _, tc := range t.ToolCalls {
 			r.ToolCalls = append(r.ToolCalls, toolCallLog{Name: tc.Function.Name, Args: truncate(tc.Function.Arguments, 300)})
 			text, isErr, err := mcp.CallTool(tc.Function.Name, json.RawMessage(tc.Function.Arguments))
 			if err != nil {
@@ -400,9 +583,7 @@ func evalOne(chat *chatClient, mcp *MCPClient, tools []map[string]any, q Questio
 			} else if isErr {
 				text = "tool error: " + text
 			}
-			messages = append(messages, chatMessage{
-				Role: "tool", ToolCallID: tc.ID, Content: truncate(text, toolResultMax),
-			})
+			c.addToolResult(tc, truncate(text, toolResultMax))
 		}
 	}
 	r.Correct = r.Predicted == q.Answer && r.Predicted != 0
@@ -413,6 +594,7 @@ func evalOne(chat *chatClient, mcp *MCPClient, tools []map[string]any, q Questio
 func main() {
 	var (
 		model          = flag.String("model", "", "model id on the OpenAI-compatible endpoint (required)")
+		api            = flag.String("api", "chat", "API style: 'chat' (chat/completions) or 'responses' (OpenAI Responses API)")
 		baseURL        = flag.String("base-url", os.Getenv("OPENAI_BASE_URL"), "OpenAI-compatible base URL; defaults to $OPENAI_BASE_URL")
 		keyEnv         = flag.String("key-env", "OPENAI_API_KEY", "environment variable holding the API key")
 		mcpURL         = flag.String("mcp", os.Getenv("THREEGPP_MCP_URL"), "3gpp-mcp streamable HTTP endpoint; defaults to $THREEGPP_MCP_URL ('' disables tools)")
@@ -426,6 +608,7 @@ func main() {
 		maxRounds      = flag.Int("max-rounds", 8, "max tool-calling rounds per question")
 		maxTokens      = flag.Int("max-tokens", 8192, "max_tokens per completion (0 = provider default)")
 		maxTokensField = flag.String("max-tokens-field", "max_tokens", "request field name for the token cap (some providers use max_completion_tokens)")
+		extraBody      = flag.String("extra-body", "", "JSON object merged into every chat request, e.g. '{\"reasoning_effort\":\"none\"}'")
 		resultMax      = flag.Int("tool-result-max", 16000, "max bytes of a tool result passed to the model")
 		outPath        = flag.String("out", "", "JSONL output path (default results/<model>-<n>q-seed<seed>.jsonl)")
 	)
@@ -464,7 +647,12 @@ func main() {
 		}
 	}
 
-	chat := &chatClient{BaseURL: *baseURL, APIKey: apiKey, Model: *model, MaxTokens: *maxTokens, MaxTokensField: *maxTokensField, HTTP: &http.Client{Timeout: 300 * time.Second}}
+	var extra map[string]any
+	if *extraBody != "" {
+		if err := json.Unmarshal([]byte(*extraBody), &extra); err != nil {
+			log.Fatalf("-extra-body: %v", err)
+		}
+	}
 
 	var mcp *MCPClient
 	var tools []map[string]any
@@ -475,14 +663,40 @@ func main() {
 			log.Fatalf("mcp tools/list: %v", err)
 		}
 		for _, t := range mcpTools {
-			tools = append(tools, map[string]any{
-				"type": "function",
-				"function": map[string]any{
-					"name": t.Name, "description": t.Description, "parameters": t.InputSchema,
-				},
-			})
+			if *api == "responses" {
+				// Responses API uses a flat tool shape; strict mode is
+				// attempted by default, so disable it for MCP schemas.
+				tools = append(tools, map[string]any{
+					"type": "function", "name": t.Name, "description": t.Description,
+					"parameters": t.InputSchema, "strict": false,
+				})
+			} else {
+				tools = append(tools, map[string]any{
+					"type": "function",
+					"function": map[string]any{
+						"name": t.Name, "description": t.Description, "parameters": t.InputSchema,
+					},
+				})
+			}
 		}
 		log.Printf("bridged %d MCP tools from %s", len(tools), *mcpURL)
+	}
+
+	httpc := &http.Client{Timeout: 300 * time.Second}
+	var be backend
+	switch *api {
+	case "chat":
+		be = &chatBackend{tools: tools, client: &chatClient{
+			BaseURL: *baseURL, APIKey: apiKey, Model: *model,
+			MaxTokens: *maxTokens, MaxTokensField: *maxTokensField, Extra: extra, HTTP: httpc,
+		}}
+	case "responses":
+		be = &responsesBackend{tools: tools, client: &responsesClient{
+			BaseURL: *baseURL, APIKey: apiKey, Model: *model,
+			MaxTokens: *maxTokens, Extra: extra, HTTP: httpc,
+		}}
+	default:
+		log.Fatalf("-api must be 'chat' or 'responses', got %q", *api)
 	}
 
 	if *outPath == "" {
@@ -521,7 +735,7 @@ func main() {
 		go func() {
 			defer wg.Done()
 			for j := range jobs {
-				r := evalOne(chat, mcp, tools, j.q, *maxRounds, *resultMax)
+				r := evalOne(be, mcp, j.q, *maxRounds, *resultMax)
 				mu.Lock()
 				_ = enc.Encode(r)
 				status := "WRONG"
