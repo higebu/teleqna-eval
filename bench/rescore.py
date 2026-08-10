@@ -41,6 +41,12 @@ def norm_spec(s):
     return f"{m.group(1).upper()} {m.group(2)}" if m else WS.sub(" ", (s or "").strip()).upper()
 
 
+def leading_number(s):
+    """The clause number at the start of a heading, e.g. "7.2.160aA" from
+    "7.2.160aA\tQuota-Indicator AVP"."""
+    return re.split(r"[\t\n]|\s{2,}", (s or "").strip(), 1)[0].strip()
+
+
 def norm_sec(s):
     s = SEC_PREFIX.sub("", (s or "").strip())
     return WS.sub(" ", s.strip().rstrip(".")).lower()
@@ -73,6 +79,11 @@ class Corpus:
                 entry = (number, parent, content)
                 index.setdefault(norm_sec(number), entry)
                 index.setdefault(norm_sec(title), entry)
+                # 9222 sections (1.7%) have the whole heading in the number
+                # column because the converter did not split it — including
+                # real clauses such as TS 32.299 7.2.160aA. Index the leading
+                # token as well so the number an engineer would write resolves.
+                index.setdefault(norm_sec(leading_number(number)), entry)
             self.by_spec[spec] = index
         return self.by_spec[spec]
 
@@ -129,21 +140,19 @@ def holds_answer(number, title, content, rec):
     if kind == "code":
         code = rec["id"].rsplit("-", 1)[-1]
         gold = rec["gold"] if isinstance(rec["gold"], str) else json.loads(rec["gold"])
-        # The registry row: code and name in one row of a table here.
-        for row in html_rows(content):
-            if len(row) >= 2 and row[0].strip() == code:
-                if norm_name(gold) in (norm_name(row[0]), norm_name(row[1])) or (
-                        len(row) > 2 and norm_name(gold) == norm_name(row[2])):
-                    return True
-        # Or the clause that defines the element. A registry lists where each
-        # element is specified, and that clause — titled after the element and
-        # carrying its code — is the citation an implementer actually wants.
-        # Requiring the title to name the element keeps a bare "2" in unrelated
-        # prose from counting.
         name = element_name(rec)
-        if name and norm_name(name) in norm_name(title):
-            return re.search(rf"\b{re.escape(code)}\b", content) is not None
-        return False
+        # A registry row: the code and the element in one row, in any column —
+        # these tables carry merged cells, so the code is not always first.
+        for row in html_rows(content):
+            cells = [cell.strip() for cell in row]
+            if code in cells and (norm_name(gold) in map(norm_name, cells) or
+                                  (name and norm_name(name) in map(norm_name, cells))):
+                return True
+        # Or the clause that defines the element. 3GPP writes the code once, in
+        # the registry, and the defining clause carries only the name and the
+        # semantics — so a clause titled after the element is the citation an
+        # implementer wants, whether or not it repeats the number.
+        return bool(name) and norm_name(name) in norm_name(title)
     gold = rec["gold"] if isinstance(rec["gold"], str) else json.loads(rec["gold"])
     return norm_latex(gold) in norm_latex(content)
 
