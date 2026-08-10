@@ -76,6 +76,12 @@ class Corpus:
             self.by_spec[spec] = index
         return self.by_spec[spec]
 
+    def title_of(self, spec, number):
+        row = self.conn.execute(
+            "SELECT title FROM sections WHERE UPPER(spec_id)=? AND number=?", (spec, number)
+        ).fetchone()
+        return row[0] if row else ""
+
     def ancestors(self, spec, number):
         """Numbers of the sections that contain `number`, innermost first."""
         out, seen = [], set()
@@ -100,8 +106,19 @@ def gold_of(rec):
     return json.loads(g) if isinstance(g, (str, bytes)) and rec["type"] != "formula" else g
 
 
-def holds_answer(content, rec):
-    """Does this section actually contain the answer the task asks for?"""
+QUOTED = re.compile(r"'([^']+)'")
+
+
+def element_name(rec):
+    """The protocol element a code task is about, however the task asks for it."""
+    if "-name-" in rec["id"]:
+        return rec["gold"] if isinstance(rec["gold"], str) else json.loads(rec["gold"])
+    m = QUOTED.search(rec.get("question", ""))
+    return m.group(1) if m else None
+
+
+def holds_answer(number, title, content, rec):
+    """Does this section actually document what the task asks about?"""
     kind = rec["type"]
     if kind == "asn1":
         gold = gold_of(rec)
@@ -110,14 +127,22 @@ def holds_answer(content, rec):
             return False
         return all(g in content for g in gold)
     if kind == "code":
-        # The registry row must be there: the code and the name, in one row of
-        # one of the tables this section holds.
-        gold = rec["gold"] if isinstance(rec["gold"], str) else json.loads(rec["gold"])
         code = rec["id"].rsplit("-", 1)[-1]
+        gold = rec["gold"] if isinstance(rec["gold"], str) else json.loads(rec["gold"])
+        # The registry row: code and name in one row of a table here.
         for row in html_rows(content):
             if len(row) >= 2 and row[0].strip() == code:
-                return norm_name(gold) in (norm_name(row[0]), norm_name(row[1])) or \
-                    (len(row) > 2 and norm_name(gold) == norm_name(row[2]))
+                if norm_name(gold) in (norm_name(row[0]), norm_name(row[1])) or (
+                        len(row) > 2 and norm_name(gold) == norm_name(row[2])):
+                    return True
+        # Or the clause that defines the element. A registry lists where each
+        # element is specified, and that clause — titled after the element and
+        # carrying its code — is the citation an implementer actually wants.
+        # Requiring the title to name the element keeps a bare "2" in unrelated
+        # prose from counting.
+        name = element_name(rec)
+        if name and norm_name(name) in norm_name(title):
+            return re.search(rf"\b{re.escape(code)}\b", content) is not None
         return False
     gold = rec["gold"] if isinstance(rec["gold"], str) else json.loads(rec["gold"])
     return norm_latex(gold) in norm_latex(content)
@@ -208,12 +233,13 @@ def grade(corpus, rec):
     if hit is None:
         return "not_found"
     number, _, content = hit
+    title = corpus.title_of(spec, number)
 
     if spec == gold_spec and norm_sec(number) == norm_sec(rec["gold_section"]):
         return "exact"
     if spec == gold_spec and number in corpus.ancestors(gold_spec, rec["gold_section"]):
         return "ancestor"
-    if holds_answer(content, rec):
+    if holds_answer(number, title, content, rec):
         return "contains"
     return "wrong"
 
