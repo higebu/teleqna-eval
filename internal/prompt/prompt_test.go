@@ -9,10 +9,11 @@ import (
 )
 
 var q = teleqna.Question{
-	ID:      "question 42",
-	Text:    "What is the purpose of the AMF? [3GPP Release 18]",
-	Options: map[int]string{2: "b option", 1: "a option", 3: "c option"},
-	Answer:  2,
+	ID:       "question 42",
+	Text:     "What is the purpose of the AMF? [3GPP Release 18]",
+	Options:  map[int]string{2: "b option", 1: "a option", 3: "c option"},
+	Answer:   2,
+	Category: "Standards specifications",
 }
 
 func TestGetUnknown(t *testing.T) {
@@ -30,10 +31,11 @@ func TestGetUnknown(t *testing.T) {
 // be waved away as "they used their own wording".
 func TestTeleQnASystemIsUpstreamText(t *testing.T) {
 	p, _ := Get("teleqna")
-	const want = "\nPlease provide the answers to the following telecommunications related \n" +
-		"multiple choice questions. The questions will be in a JSON format, the \n" +
-		"answers must also be in a JSON format as follows:\n {\n\"question 1\": {\n" +
-		"\"question\": question,\n\"answer\": \"option {answer id}: {answer string}\"\n},\n...\n}\n"
+	// Byte for byte from netop-team/TeleQnA evaluation_tools.py.
+	const want = "\nPlease provide the answers to the following telecommunications related multiple choice " +
+		"questions. The questions will be in a JSON format, the answers must also be in a JSON " +
+		"format as follows:\n {\n\"question 1\": {\n\"question\": question,\n" +
+		"\"answer\": \"option {answer id}: {answer string}\"\n},\n...\n}\n"
 	if p.System != want {
 		t.Errorf("system prompt drifted from upstream:\n got %q\nwant %q", p.System, want)
 	}
@@ -67,6 +69,10 @@ func TestFormatTeleQnA(t *testing.T) {
 	}
 	if _, leaked := inner["answer"]; leaked {
 		t.Error("the answer was sent to the model")
+	}
+	// Upstream's category pop tests the wrong dict, so the category is sent.
+	if inner["category"] != q.Category {
+		t.Errorf("category = %q, want %q (upstream sends it)", inner["category"], q.Category)
 	}
 	if i1, i2 := strings.Index(body, `"option 1"`), strings.Index(body, `"option 2"`); i1 > i2 {
 		t.Error("options are not in numeric order")

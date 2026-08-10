@@ -57,13 +57,12 @@ func (p *Prompt) SHA256() string {
 }
 
 // teleqnaSystem is the system prompt of netop-team/TeleQnA's
-// evaluation_tools.py, reproduced byte for byte: the leading and trailing
-// newlines and the trailing spaces that end the first two lines are all
-// upstream's, and are kept so the wording is not silently ours.
+// evaluation_tools.py, reproduced byte for byte, including the leading and
+// trailing newline and the space before the opening brace, so the wording is
+// upstream's rather than ours.
 const teleqnaSystem = "\n" +
-	"Please provide the answers to the following telecommunications related \n" +
-	"multiple choice questions. The questions will be in a JSON format, the \n" +
-	"answers must also be in a JSON format as follows:\n" +
+	"Please provide the answers to the following telecommunications related multiple choice questions. " +
+	"The questions will be in a JSON format, the answers must also be in a JSON format as follows:\n" +
 	" {\n" +
 	"\"question 1\": {\n" +
 	"\"question\": question,\n" +
@@ -134,11 +133,20 @@ func IDs() []string {
 	return ids
 }
 
-// formatTeleQnA renders the user message the way evaluation_tools.py does:
-// the fixed lead-in followed by json.dumps of the question with its answer,
-// explanation and category removed. The object is assembled by hand rather than
-// with json.Marshal so the key order and the ", "/": " separators match Python's
-// json.dumps, and so the output does not depend on Go's map iteration order.
+// formatTeleQnA renders the user message the way evaluation_tools.py does: the
+// fixed lead-in followed by json.dumps of the question with its answer and
+// explanation removed.
+//
+// The category is *kept*, because upstream's removal of it does not fire:
+// `if 'category' in questions_only` tests the outer dict of questions rather
+// than the question itself, so every question upstream sends carries its
+// category. Reproducing that keeps this faithful to what the model is actually
+// shown; the field is the same constant string for every question in the
+// filtered pool, so it cannot separate the two conditions either way.
+//
+// The object is assembled by hand rather than with json.Marshal so the key
+// order and the ", "/": " separators match Python's json.dumps, and so the
+// output does not depend on Go's map iteration order.
 func formatTeleQnA(q teleqna.Question) string {
 	nums := make([]int, 0, len(q.Options))
 	for n := range q.Options {
@@ -152,6 +160,10 @@ func formatTeleQnA(q teleqna.Question) string {
 	for _, n := range nums {
 		fmt.Fprintf(&inner, `, "option %d": `, n)
 		inner.Write(jsonString(q.Options[n]))
+	}
+	if q.Category != "" {
+		inner.WriteString(`, "category": `)
+		inner.Write(jsonString(q.Category))
 	}
 	inner.WriteString("}")
 
