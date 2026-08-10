@@ -211,18 +211,30 @@ def grade_openapi(corpus, rec):
         "SELECT content FROM openapi_specs WHERE UPPER(spec_id)=? AND api_name=?",
         (spec, api),
     ).fetchone()
-    if not row:
+    if row:
+        start = row[0].find("  schemas:")
+        for m in SCHEMA_RE.finditer(row[0][start:]):
+            if m.group(1) != name:
+                continue
+            rm = REQUIRED_RE.search(m.group(2))
+            if not rm:
+                continue
+            props = [l.strip("- \n") for l in rm.group(1).strip().splitlines()]
+            if props == gold:
+                return "exact" if api == rec["gold_section"] else "contains"
+        return "wrong"
+
+    # Not an API name. In the SBI specifications the normative definition is a
+    # clause of the running text — "6.1.6.2.23  Type: UeContextTransferReqData",
+    # "7.3.5  ThresholdCrossing <<dataType>>" — and the OpenAPI file in the
+    # annex is generated from it. That clause is the citation an implementer
+    # wants, so accept a section this specification titles after the schema.
+    hit = corpus.sections(spec).get(norm_sec(api))
+    if hit is None:
         return "not_found"
-    start = row[0].find("  schemas:")
-    for m in SCHEMA_RE.finditer(row[0][start:]):
-        if m.group(1) != name:
-            continue
-        rm = REQUIRED_RE.search(m.group(2))
-        if not rm:
-            continue
-        props = [l.strip("- \n") for l in rm.group(1).strip().splitlines()]
-        if props == gold:
-            return "exact" if api == rec["gold_section"] else "contains"
+    number, _, _ = hit
+    if re.search(rf"\b{re.escape(name)}\b", corpus.title_of(spec, number)):
+        return "contains"
     return "wrong"
 
 
