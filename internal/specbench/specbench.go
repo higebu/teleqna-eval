@@ -166,7 +166,7 @@ func Grade(t Task, a Answer) Score {
 
 var (
 	spaceRe   = regexp.MustCompile(`\s+`)
-	latexCmd  = regexp.MustCompile(`\\(left|right|,|;|!|quad|qquad)\b?`)
+	latexCmd  = regexp.MustCompile(`\\(left|right|quad|qquad)\b|\\[,;!]`)
 	textRe    = regexp.MustCompile(`\\(text|mathrm|mathit)\{([^}]*)\}`)
 	braceOne  = regexp.MustCompile(`\{(\\?[A-Za-z0-9]+)\}`)
 	specIDRe  = regexp.MustCompile(`(?i)\b(TS|TR)\s*([0-9]{2}\.[0-9]{3}(?:-[0-9]+)?)`)

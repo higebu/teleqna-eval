@@ -36,10 +36,31 @@ import sqlite3
 import sys
 
 ASN1_FENCE = re.compile(r"```asn1\n(.*?)```", re.S)
-# A type defined at column 0 with its body, e.g. "PDCP-Config ::= SEQUENCE {".
-ASN1_DEF = re.compile(r"^([A-Za-z][\w-]*)\s*::=\s*SEQUENCE\s*\{(.*?)^\}", re.S | re.M)
-# A field line: indented, starts with a lower-case identifier followed by a type.
-ASN1_FIELD = re.compile(r"^\s{2,}([a-z][\w-]*)\s+\S", re.M)
+# The head of a definition at column 0, e.g. "PDCP-Config ::= SEQUENCE {".
+ASN1_HEAD = re.compile(r"^([A-Za-z][\w-]*)\s*::=\s*SEQUENCE\s*\{", re.M)
+# A member line: indented, a lower-case identifier followed by its type.
+ASN1_FIELD = re.compile(r"^\s+([a-z][\w-]*)\s+\S")
+
+
+def top_level_fields(block, start):
+    """Members of the SEQUENCE opening at `start`, ignoring nested ones.
+
+    A CHOICE or an inner SEQUENCE brings its own members, and counting those
+    as fields of the outer type produced golds that were simply wrong — a
+    model answering the two real top-level fields looked like a failure. Only
+    lines seen while the brace depth is 1 are members.
+    """
+    depth, fields = 0, []
+    for line in block[start:].splitlines():
+        opens, closes = line.count("{"), line.count("}")
+        if depth == 1:
+            m = ASN1_FIELD.match(line)
+            if m and m.group(1) not in fields:
+                fields.append(m.group(1))
+        depth += opens - closes
+        if depth <= 0:
+            break
+    return fields
 
 DISPLAY_MATH = re.compile(r"\$\$(.+?)\$\$", re.S)
 # An equation states a relation, and is worth asking about only if it has
@@ -63,10 +84,10 @@ def asn1_tasks(conn, n, rng):
         for block in ASN1_FENCE.findall(content):
             if "/example/" in block:  # the illustrative block in 38.331 6.1.2
                 continue
-            for name, body in ASN1_DEF.findall(block):
-                fields = ASN1_FIELD.findall(body)
+            for m in ASN1_HEAD.finditer(block):
+                fields = top_level_fields(block, m.end() - 1)
                 if 3 <= len(fields) <= 12:
-                    defs[name].append(
+                    defs[m.group(1)].append(
                         dict(spec_id=spec, version=version, section=number,
                              section_title=title, fields=fields)
                     )
@@ -81,7 +102,9 @@ def asn1_tasks(conn, n, rng):
             "type": "asn1",
             "question": (
                 f"The 3GPP specifications define an ASN.1 type named {name} as a SEQUENCE. "
-                f"List the names of its fields, in the order they appear in the definition."
+                f"List the names of its top-level fields — the immediate members of that "
+                f"SEQUENCE, not the members of any nested CHOICE or SEQUENCE — in the order "
+                f"they appear in the definition."
             ),
             "gold": d["fields"],
             "spec_id": d["spec_id"],
@@ -126,10 +149,16 @@ def formula_tasks(conn, n, rng):
                               section_title=title, stem=stem, eq=eq))
     rng.shuffle(cands)
 
+    # The RF test specifications copy whole measurement clauses between each
+    # other, so the same sentence introduces the same equation in several
+    # documents. Such a task has more than one correct citation; drop it.
+    stem_count = collections.Counter(d["stem"] for d in cands)
+    eq_count = collections.Counter(d["eq"] for d in cands)
+
     tasks, seen = [], set()
     for d in cands:
         key = (d["spec_id"], d["section"])
-        if key in seen:
+        if key in seen or stem_count[d["stem"]] > 1 or eq_count[d["eq"]] > 1:
             continue
         seen.add(key)
         tasks.append({
