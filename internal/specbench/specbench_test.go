@@ -137,3 +137,64 @@ func TestSummary(t *testing.T) {
 		t.Error("empty summary line")
 	}
 }
+
+func task(kind, gold, section, api string) Task {
+	return Task{Type: "x", Kind: kind, Gold: json.RawMessage(gold),
+		SpecID: "TS 29.274", Section: section, APIName: api}
+}
+
+// A wire code is a number however the model dresses it up, and an element name
+// matches with or without the expansion the registry tables carry.
+func TestGradeScalar(t *testing.T) {
+	code := task("scalar", `"45"`, "8.1", "")
+	for _, got := range []string{`"45"`, `45`, `"45 (decimal)"`, `"IE type 45"`, `"045"`} {
+		if s := Grade(code, Answer{Answer: json.RawMessage(got), SpecID: "TS 29.274", Section: "8.1"}); !s.Answer {
+			t.Errorf("answer %s scored wrong", got)
+		}
+	}
+	if s := Grade(code, Answer{Answer: json.RawMessage(`"46"`), SpecID: "TS 29.274", Section: "8.1"}); s.Answer {
+		t.Error("46 accepted for gold 45")
+	}
+
+	name := task("scalar", `"International Mobile Subscriber Identity (IMSI)"`, "8.1", "")
+	for _, got := range []string{
+		`"International Mobile Subscriber Identity (IMSI)"`,
+		`"International Mobile Subscriber Identity"`,
+		`"international mobile subscriber identity"`,
+	} {
+		if s := Grade(name, Answer{Answer: json.RawMessage(got), SpecID: "TS 29.274", Section: "8.1"}); !s.Answer {
+			t.Errorf("answer %s scored wrong", got)
+		}
+	}
+}
+
+// Required properties are a set, so their order must not decide the score.
+func TestGradeSet(t *testing.T) {
+	tk := task("set", `["a","b","c"]`, "Nnrf_NFManagement", "Nnrf_NFManagement")
+	tk.SpecID = "TS 29.510"
+	ans := func(a string) Answer {
+		return Answer{Answer: json.RawMessage(a), SpecID: "TS 29.510", Section: "Nnrf_NFManagement"}
+	}
+	if s := Grade(tk, ans(`["c","a","b"]`)); !s.Answer || !s.Both {
+		t.Errorf("reordered set scored %+v", s)
+	}
+	if s := Grade(tk, ans(`["a","b"]`)); s.Answer || s.Partial == 0 {
+		t.Errorf("subset scored %+v, want wrong with partial credit", s)
+	}
+	// An OpenAPI citation names the API document, not a clause.
+	if s := Grade(tk, Answer{Answer: json.RawMessage(`["a","b","c"]`), SpecID: "TS 29.510", Section: "6.1.6.2.2"}); s.Citation {
+		t.Error("a clause number was accepted as an OpenAPI citation")
+	}
+}
+
+// Task files written before answer_kind existed must score as they did.
+func TestKindFallsBackToType(t *testing.T) {
+	for typ, want := range map[string]string{"asn1": "sequence", "openapi": "set", "code": "scalar", "formula": "latex"} {
+		if got := (Task{Type: typ}).kind(); got != want {
+			t.Errorf("%s -> %s, want %s", typ, got, want)
+		}
+	}
+	if got := (Task{Type: "asn1", Kind: "scalar"}).kind(); got != "scalar" {
+		t.Errorf("explicit kind ignored: %s", got)
+	}
+}

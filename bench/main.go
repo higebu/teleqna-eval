@@ -22,6 +22,7 @@ import (
 
 	"teleqna-eval/internal/llm"
 	"teleqna-eval/internal/mcpclient"
+	"teleqna-eval/internal/retrieval"
 	"teleqna-eval/internal/specbench"
 )
 
@@ -32,10 +33,11 @@ const systemPrompt = `You are answering questions about 3GPP specifications.
 Reply with a JSON object and nothing else:
 {"answer": <answer>, "spec_id": "<specification>", "section": "<section>"}
 
-- For a list of ASN.1 field names, "answer" is a JSON array of the names, in the order they are defined.
+- For a list of names — ASN.1 fields, required properties — "answer" is a JSON array of them. Give ASN.1 fields in the order they are defined.
 - For an equation, "answer" is a JSON string holding the LaTeX of the equation, without $ delimiters.
+- For a single value — a wire code, an element name, a data type — "answer" is a JSON string or number holding just that value.
 - "spec_id" is the specification the answer is defined in, e.g. "TS 38.331".
-- "section" is the clause number, or the clause heading when the specification numbers clauses by name.
+- "section" is the clause number, or the clause heading when the specification numbers clauses by name. For an OpenAPI schema it is the name of the API definition that declares it, e.g. "Nnrf_NFManagement".
 
 The citation is part of the answer: it must be where this is actually defined.`
 
@@ -57,8 +59,18 @@ type record struct {
 	Duration  float64           `json:"duration_sec"`
 	Final     string            `json:"final_message"`
 	Error     string            `json:"error,omitempty"`
+	Retrieval string            `json:"retrieval"`
 	Meta      map[string]string `json:"meta"`
 	Retrieved map[string]int    `json:"retrieved,omitempty"`
+}
+
+// goldCitation is the clause a task was generated from, or the API document for
+// an OpenAPI schema, which is cited by name rather than by clause.
+func goldCitation(t specbench.Task) string {
+	if t.APIName != "" {
+		return t.APIName
+	}
+	return t.Section
 }
 
 type toolCall struct {
@@ -81,6 +93,7 @@ func main() {
 		temp      = flag.String("temperature", "", "sampling temperature; empty sends none")
 		timeout   = flag.Int("http-timeout", 900, "per-request timeout in seconds")
 		resultMax = flag.Int("tool-result-max", 16000, "max bytes of a tool result")
+		fixedK    = flag.Int("fixedk", 0, "retrieval baseline: one search, top-k sections prepended, no tools (0 = let the model drive its own tool loop)")
 		dbMan     = flag.String("db-manifest", "", "identifier of the pinned database")
 		out       = flag.String("out", "", "JSONL output path")
 	)
@@ -131,9 +144,16 @@ func main() {
 		log.Fatal(err)
 	}
 
+	if *fixedK > 0 && mcp == nil {
+		log.Fatal("-fixedk needs an MCP endpoint to retrieve from")
+	}
+
 	if *out == "" {
 		suffix := "notools"
-		if mcp != nil {
+		switch {
+		case *fixedK > 0:
+			suffix = fmt.Sprintf("fixedk%d", *fixedK)
+		case mcp != nil:
 			suffix = "tools"
 		}
 		base := filepath.Base(*tasksPath)
@@ -150,10 +170,18 @@ func main() {
 	}
 	defer f.Close()
 
+	retrievalMode := "none"
+	switch {
+	case *fixedK > 0:
+		retrievalMode = "fixedk"
+	case mcp != nil:
+		retrievalMode = "agentic"
+	}
 	meta := map[string]string{
 		"model": *model, "api": *api, "mcp": *mcpURL, "db_manifest": *dbMan,
 		"tasks": *tasksPath, "started_at": time.Now().UTC().Format(time.RFC3339),
-		"prompt_sha256": sha(systemPrompt),
+		"prompt_sha256": sha(systemPrompt), "retrieval": retrievalMode,
+		"fixed_k": strconv.Itoa(*fixedK),
 	}
 	enc := json.NewEncoder(f)
 	var (
@@ -168,8 +196,9 @@ func main() {
 		go func() {
 			defer wg.Done()
 			for t := range ch {
-				r := run(be, mcp, t, *maxRounds, *resultMax)
+				r := run(be, mcp, t, *maxRounds, *resultMax, *fixedK)
 				r.Meta = meta
+				r.Retrieval = retrievalMode
 				mu.Lock()
 				_ = enc.Encode(r)
 				if sum[t.Type] == nil {
@@ -196,16 +225,30 @@ func main() {
 	fmt.Printf("results: %s\n", *out)
 }
 
-func run(be llm.Backend, mcp *mcpclient.Client, t specbench.Task, maxRounds, resultMax int) record {
+func run(be llm.Backend, mcp *mcpclient.Client, t specbench.Task, maxRounds, resultMax, fixedK int) record {
 	start := time.Now()
 	r := record{ID: t.ID, Type: t.Type, Question: t.Question, Gold: t.Gold,
-		GoldSpec: t.SpecID, GoldSec: t.Section, Usage: map[string]int{}, Retrieved: map[string]int{}}
-	c := be.NewConvo(systemPrompt, t.Question)
+		GoldSpec: t.SpecID, GoldSec: goldCitation(t), Usage: map[string]int{}, Retrieved: map[string]int{}}
+
+	user := t.Question
+	agentic := mcp != nil && fixedK == 0
+	if mcp != nil && fixedK > 0 {
+		// The retrieved text is prepended, so the question itself is rendered
+		// exactly as in every other condition.
+		ctx, calls := retrieval.FixedK(mcp, t.Question, fixedK, resultMax)
+		user = ctx + user
+		for _, c := range calls {
+			r.ToolCalls = append(r.ToolCalls, toolCall{Name: c.Name, Args: c.Args, Result: c.Result})
+			r.Retrieved[c.Name]++
+		}
+	}
+
+	c := be.NewConvo(systemPrompt, user)
 	retries := 0
 	for round := 0; ; round++ {
 		r.Rounds = round + 1
-		withTools := mcp != nil
-		if withTools && round >= maxRounds {
+		withTools := agentic
+		if agentic && round >= maxRounds {
 			withTools = false
 			c.AddUser("Tool budget exhausted. Answer now. " + retryPrompt)
 		}
@@ -240,9 +283,7 @@ func run(be llm.Backend, mcp *mcpclient.Client, t specbench.Task, maxRounds, res
 			} else if isErr {
 				text = "tool error: " + text
 			}
-			if len(text) > resultMax {
-				text = text[:resultMax] + "\n...[truncated]"
-			}
+			text = retrieval.Truncate(text, resultMax)
 			c.AddToolResult(tc, text)
 			r.ToolCalls = append(r.ToolCalls, toolCall{Name: tc.Function.Name, Args: tc.Function.Arguments, Result: text})
 			r.Retrieved[tc.Function.Name]++

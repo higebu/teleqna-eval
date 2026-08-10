@@ -29,6 +29,7 @@ import json
 import re
 import sqlite3
 import sys
+from html.parser import HTMLParser
 
 SPEC_RE = re.compile(r"(?i)\b(TS|TR)\s*([0-9]{2}\.[0-9]{3}(?:-[0-9]+)?)")
 SEC_PREFIX = re.compile(r"(?i)^(clause|section|sec\.?|annex)\s*")
@@ -94,20 +95,106 @@ class Corpus:
         return out
 
 
+def gold_of(rec):
+    g = rec["gold"]
+    return json.loads(g) if isinstance(g, (str, bytes)) and rec["type"] != "formula" else g
+
+
 def holds_answer(content, rec):
     """Does this section actually contain the answer the task asks for?"""
-    if rec["type"] == "asn1":
-        gold = rec["gold"] if isinstance(rec["gold"], list) else json.loads(rec["gold"])
+    kind = rec["type"]
+    if kind == "asn1":
+        gold = gold_of(rec)
         name = rec["id"][len("asn1-"):]
         if f"{name} ::=" not in content:
             return False
         return all(g in content for g in gold)
+    if kind == "code":
+        # The registry row must be there: the code and the name, in one row of
+        # one of the tables this section holds.
+        gold = rec["gold"] if isinstance(rec["gold"], str) else json.loads(rec["gold"])
+        code = rec["id"].rsplit("-", 1)[-1]
+        for row in html_rows(content):
+            if len(row) >= 2 and row[0].strip() == code:
+                return norm_name(gold) in (norm_name(row[0]), norm_name(row[1])) or \
+                    (len(row) > 2 and norm_name(gold) == norm_name(row[2]))
+        return False
     gold = rec["gold"] if isinstance(rec["gold"], str) else json.loads(rec["gold"])
-    flat = norm_latex(content)
-    return norm_latex(gold) in flat
+    return norm_latex(gold) in norm_latex(content)
+
+
+def norm_name(s):
+    s = re.sub(r"\s*\([^)]*\)\s*$", "", (s or "").strip())
+    return WS.sub(" ", s).strip(" .").lower()
+
+
+class _TableParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.rows, self._row, self._cell = [], None, None
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "tr":
+            self._row = []
+        elif tag in ("td", "th"):
+            self._cell = []
+
+    def handle_endtag(self, tag):
+        if tag == "tr" and self._row is not None:
+            self.rows.append(self._row)
+            self._row = None
+        elif tag in ("td", "th") and self._cell is not None:
+            if self._row is not None:
+                self._row.append(WS.sub(" ", "".join(self._cell)).strip())
+            self._cell = None
+
+    def handle_data(self, data):
+        if self._cell is not None:
+            self._cell.append(data)
+
+
+def html_rows(content):
+    p = _TableParser()
+    p.feed(content)
+    return p.rows
+
+
+SCHEMA_RE = re.compile(r"^    ([A-Za-z][\w]*):\n((?:      .*\n|\n)*)", re.M)
+REQUIRED_RE = re.compile(r"^      required:\n((?:        - \w+\n)+)", re.M)
+
+
+def grade_openapi(corpus, rec):
+    """OpenAPI schemas are cited by API document, and the same schema may be
+    declared by more than one of them."""
+    spec = norm_spec(rec.get("predicted_spec_id"))
+    api = (rec.get("predicted_section") or "").strip()
+    if not api:
+        return "wrong"
+    name = rec["id"].rsplit("-", 1)[-1]
+    gold = gold_of(rec)
+
+    row = corpus.conn.execute(
+        "SELECT content FROM openapi_specs WHERE UPPER(spec_id)=? AND api_name=?",
+        (spec, api),
+    ).fetchone()
+    if not row:
+        return "not_found"
+    start = row[0].find("  schemas:")
+    for m in SCHEMA_RE.finditer(row[0][start:]):
+        if m.group(1) != name:
+            continue
+        rm = REQUIRED_RE.search(m.group(2))
+        if not rm:
+            continue
+        props = [l.strip("- \n") for l in rm.group(1).strip().splitlines()]
+        if props == gold:
+            return "exact" if api == rec["gold_section"] else "contains"
+    return "wrong"
 
 
 def grade(corpus, rec):
+    if rec["type"] == "openapi":
+        return grade_openapi(corpus, rec)
     spec = norm_spec(rec.get("predicted_spec_id"))
     sec = norm_sec(rec.get("predicted_section"))
     gold_spec = norm_spec(rec["gold_spec_id"])
