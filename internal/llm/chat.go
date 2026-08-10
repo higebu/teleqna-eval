@@ -9,6 +9,7 @@ import (
 type ChatClient struct {
 	BaseURL, APIKey, Model string
 	MaxTokens              int
+	Temperature            *float64       // nil sends no temperature field at all
 	MaxTokensField         string         // "max_tokens", or "max_completion_tokens" for newer OpenAI models
 	Extra                  map[string]any // extra request fields, e.g. {"reasoning_effort": "none"}
 	HTTP                   *http.Client
@@ -56,6 +57,9 @@ type chatUsage struct {
 
 func (c *ChatClient) complete(messages []chatMessage, tools []map[string]any) (*chatMessage, *chatUsage, error) {
 	reqBody := map[string]any{"model": c.Model, "messages": messages}
+	if c.Temperature != nil {
+		reqBody["temperature"] = *c.Temperature
+	}
 	if c.MaxTokens > 0 {
 		reqBody[c.MaxTokensField] = c.MaxTokens
 	}

@@ -16,6 +16,7 @@ const anthropicVersion = "2023-06-01"
 type AnthropicClient struct {
 	BaseURL, APIKey, Model string
 	MaxTokens              int
+	Temperature            *float64 // nil sends no temperature field at all
 	Extra                  map[string]any
 	HTTP                   *http.Client
 }
@@ -153,6 +154,9 @@ func (c *anthConvo) Step(withTools bool) (*Turn, error) {
 		"max_tokens": cl.MaxTokens,
 		"system":     c.system,
 		"messages":   c.messages,
+	}
+	if cl.Temperature != nil {
+		reqBody["temperature"] = *cl.Temperature
 	}
 	for k, v := range cl.Extra {
 		reqBody[k] = v

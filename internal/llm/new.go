@@ -12,6 +12,7 @@ type Config struct {
 	Model          string
 	MaxTokens      int
 	MaxTokensField string
+	Temperature    *float64 // nil sends no temperature field at all
 	Extra          map[string]any
 	HTTP           *http.Client
 	Tools          []ToolDef
@@ -26,17 +27,17 @@ func New(cfg Config) (Backend, int, error) {
 		return NewChatBackend(&ChatClient{
 			BaseURL: cfg.BaseURL, APIKey: cfg.APIKey, Model: cfg.Model,
 			MaxTokens: cfg.MaxTokens, MaxTokensField: cfg.MaxTokensField,
-			Extra: cfg.Extra, HTTP: cfg.HTTP,
+			Temperature: cfg.Temperature, Extra: cfg.Extra, HTTP: cfg.HTTP,
 		}, cfg.Tools), cfg.MaxTokens, nil
 	case "responses":
 		return NewResponsesBackend(&ResponsesClient{
 			BaseURL: cfg.BaseURL, APIKey: cfg.APIKey, Model: cfg.Model,
-			MaxTokens: cfg.MaxTokens, Extra: cfg.Extra, HTTP: cfg.HTTP,
+			MaxTokens: cfg.MaxTokens, Temperature: cfg.Temperature, Extra: cfg.Extra, HTTP: cfg.HTTP,
 		}, cfg.Tools), cfg.MaxTokens, nil
 	case "anthropic":
 		cl := &AnthropicClient{
 			BaseURL: cfg.BaseURL, APIKey: cfg.APIKey, Model: cfg.Model,
-			MaxTokens: cfg.MaxTokens, Extra: cfg.Extra, HTTP: cfg.HTTP,
+			MaxTokens: cfg.MaxTokens, Temperature: cfg.Temperature, Extra: cfg.Extra, HTTP: cfg.HTTP,
 		}
 		if cl.MaxTokens == 0 {
 			max, err := cl.MaxOutputTokens()

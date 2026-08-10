@@ -93,6 +93,35 @@ func (c *Client) ListTools() ([]Tool, error) {
 	return out.Tools, nil
 }
 
+// ServerInfo asks the server to identify itself, for the run metadata. The
+// server is stateless, so this is an ordinary request and its result is not
+// needed for anything else; a server that refuses it yields a nil map rather
+// than failing the run.
+func (c *Client) ServerInfo() map[string]string {
+	res, err := c.rpc("initialize", map[string]any{
+		"protocolVersion": "2025-06-18",
+		"capabilities":    map[string]any{},
+		"clientInfo":      map[string]any{"name": "teleqna-eval", "version": "1"},
+	})
+	if err != nil {
+		return nil
+	}
+	var out struct {
+		ProtocolVersion string `json:"protocolVersion"`
+		ServerInfo      struct {
+			Name    string `json:"name"`
+			Version string `json:"version"`
+		} `json:"serverInfo"`
+	}
+	if err := json.Unmarshal(res, &out); err != nil {
+		return nil
+	}
+	return map[string]string{
+		"name": out.ServerInfo.Name, "version": out.ServerInfo.Version,
+		"protocol_version": out.ProtocolVersion,
+	}
+}
+
 // CallTool returns the tool's text output and whether the tool itself reported
 // an error (isError), which is distinct from a transport failure.
 func (c *Client) CallTool(name string, args json.RawMessage) (string, bool, error) {

@@ -9,6 +9,7 @@ import (
 type ResponsesClient struct {
 	BaseURL, APIKey, Model string
 	MaxTokens              int
+	Temperature            *float64 // nil sends no temperature field at all
 	Extra                  map[string]any
 	HTTP                   *http.Client
 }
@@ -67,6 +68,9 @@ func (c *respConvo) Step(withTools bool) (*Turn, error) {
 		"input":        c.input,
 		"store":        false,
 		"include":      []string{"reasoning.encrypted_content"},
+	}
+	if cl.Temperature != nil {
+		reqBody["temperature"] = *cl.Temperature
 	}
 	if cl.MaxTokens > 0 {
 		reqBody["max_output_tokens"] = cl.MaxTokens
