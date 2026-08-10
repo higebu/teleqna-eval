@@ -8,7 +8,9 @@ cd "$(dirname "$0")/.."
 MODEL=deepseek-v4-flash
 COMMON=(-base-url https://api.deepseek.com -key-env DEEPSEEK_API_KEY -model "$MODEL"
   -filter 3GPP -n 1509 -seed 42 -workers 32
-  -max-tokens 0 -max-rounds 20 -http-timeout 900)
+  -prompt "${PROMPT:-teleqna}" -temperature 0
+  -max-tokens 0 -max-rounds 20 -http-timeout 900
+  -db-manifest "${DB_MANIFEST:?set DB_MANIFEST to the pinned database identifier}")
 
 ./eval "${COMMON[@]}" -out "results/${MODEL}-tools-3gpp-1509q-seed42.jsonl"
 ./eval "${COMMON[@]}" -mcp '' -out "results/${MODEL}-notools-3gpp-1509q-seed42.jsonl"
