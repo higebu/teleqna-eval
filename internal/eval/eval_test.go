@@ -268,20 +268,6 @@ func TestOneFixedK(t *testing.T) {
 	}
 }
 
-func TestFixedKQuery(t *testing.T) {
-	q := teleqna.Question{Text: "What is the purpose of the AMF in TS 23.501? [3GPP Release 18]"}
-	got := fixedKQuery(q)
-	if strings.Contains(got, "Release") || strings.Contains(got, "3GPP") {
-		t.Errorf("release tag leaked into the query: %q", got)
-	}
-	if !strings.Contains(got, "AMF") || !strings.Contains(got, "23.501") || !strings.Contains(got, " OR ") {
-		t.Errorf("query = %q", got)
-	}
-	if strings.Contains(got, "the OR") {
-		t.Errorf("stopword kept: %q", got)
-	}
-}
-
 func jobsOf(qs []teleqna.Question) []Job {
 	jobs := make([]Job, 0, len(qs))
 	for _, q := range qs {
@@ -336,15 +322,5 @@ func TestRunCountsLooseParses(t *testing.T) {
 	o := opts(t, "ansline", 8, 0)
 	if s := Run(be, nil, jobsOf([]teleqna.Question{question}), o, &buf, nil); s.LooseParse != 1 {
 		t.Errorf("summary = %+v", s)
-	}
-}
-
-func TestTruncate(t *testing.T) {
-	if got := truncate("abcde", 5); got != "abcde" {
-		t.Errorf("got %q", got)
-	}
-	got := truncate("abcde", 3)
-	if !strings.HasPrefix(got, "abc\n") || !strings.Contains(got, "truncated 2 bytes") {
-		t.Errorf("got %q", got)
 	}
 }

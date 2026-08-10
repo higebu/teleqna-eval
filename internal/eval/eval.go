@@ -9,12 +9,12 @@ package eval
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
 	"time"
 
 	"teleqna-eval/internal/llm"
 	"teleqna-eval/internal/prompt"
+	"teleqna-eval/internal/retrieval"
 	"teleqna-eval/internal/teleqna"
 )
 
@@ -110,13 +110,6 @@ type TraceToolCall struct {
 	IsErr  bool   `json:"is_error,omitempty"`
 }
 
-func truncate(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max] + fmt.Sprintf("\n...[truncated %d bytes; refine the query or use offset to read more]", len(s)-max)
-}
-
 // One evaluates a single question and returns both the result record and the
 // full trace behind it.
 func One(be llm.Backend, mcp ToolCaller, q teleqna.Question, opts Options) (Result, *Trace) {
@@ -136,8 +129,10 @@ func One(be llm.Backend, mcp ToolCaller, q teleqna.Question, opts Options) (Resu
 		r.Retrieval = RetrievalAgentic
 	case mcp != nil:
 		r.Retrieval = RetrievalFixedK
-		var ctx string
-		ctx, retrieved = retrieveFixedK(mcp, q, opts.FixedK, opts.ToolResultMax)
+		ctx, calls := retrieval.FixedK(mcp, q.Text, opts.FixedK, opts.ToolResultMax)
+		for _, c := range calls {
+			retrieved = append(retrieved, TraceToolCall{Name: c.Name, Args: c.Args, Result: c.Result, IsErr: c.IsErr})
+		}
 		// The retrieved text is prepended, so the question itself is still
 		// rendered by the same prompt variant as in every other condition.
 		user = ctx + user
@@ -205,7 +200,7 @@ func One(be llm.Backend, mcp ToolCaller, q teleqna.Question, opts Options) (Resu
 			} else if isErr {
 				text = "tool error: " + text
 			}
-			sent := truncate(text, opts.ToolResultMax)
+			sent := retrieval.Truncate(text, opts.ToolResultMax)
 			c.AddToolResult(tc, sent)
 			step.Tools = append(step.Tools, TraceToolCall{
 				Name: tc.Function.Name, Args: tc.Function.Arguments, Result: sent, IsErr: isErr,
