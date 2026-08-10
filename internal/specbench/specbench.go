@@ -299,6 +299,12 @@ func normLatex(s string) string {
 	s = spaceRe.ReplaceAllString(s, "")
 	s = strings.ReplaceAll(s, "\\cdot", "·")
 	s = strings.ReplaceAll(s, "\\ast", "*")
+	// The converter escapes angle brackets in maths, so \lt and < are the same
+	// equation written twice.
+	for _, r := range [][2]string{{"\\leq", "≤"}, {"\\geq", "≥"}, {"\\le", "≤"}, {"\\ge", "≥"},
+		{"\\lt", "<"}, {"\\gt", ">"}, {"\\neq", "≠"}} {
+		s = strings.ReplaceAll(s, r[0], r[1])
+	}
 	for i := 0; i < 3; i++ { // nested braces around single tokens
 		s = braceOne.ReplaceAllString(s, "$1")
 	}

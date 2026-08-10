@@ -198,3 +198,20 @@ func TestKindFallsBackToType(t *testing.T) {
 		t.Errorf("explicit kind ignored: %s", got)
 	}
 }
+
+// The converter escapes angle brackets inside maths, so the corpus writes
+// "\lt" where the source shows "<". A model answering with either form has
+// given the same equation and must score the same.
+func TestGradeLatexEscapedRelations(t *testing.T) {
+	tk := Task{Type: "formula", Kind: "latex", Gold: json.RawMessage(`"N\\leq a\\lt N+1"`),
+		SpecID: "TS 23.032", Section: "Altitude"}
+	for _, got := range []string{`"N\\leq a\\lt N+1"`, `"N \\le a < N+1"`, `"$$N\\leq a<N+1$$"`} {
+		s := Grade(tk, Answer{Answer: json.RawMessage(got), SpecID: "TS 23.032", Section: "Altitude"})
+		if !s.Answer {
+			t.Errorf("answer %s scored wrong", got)
+		}
+	}
+	if s := Grade(tk, Answer{Answer: json.RawMessage(`"N\\geq a\\gt N+1"`), SpecID: "TS 23.032", Section: "Altitude"}); s.Answer {
+		t.Error("a different relation was accepted")
+	}
+}

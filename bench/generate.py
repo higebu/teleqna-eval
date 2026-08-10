@@ -64,6 +64,16 @@ def top_level_fields(block, start):
     return fields
 
 DISPLAY_MATH = re.compile(r"\$\$(.+?)\$\$", re.S)
+# Since 3gpp-mcp emits standalone equations as fenced latex, most display maths
+# is a fence; $$...$$ survives where a fence cannot go, such as a table cell.
+LATEX_FENCE = re.compile(r"```latex\n(.+?)\n```", re.S)
+
+
+def display_equations(content):
+    """(equation, offset) for every standalone equation, in either notation."""
+    for pattern in (LATEX_FENCE, DISPLAY_MATH):
+        for m in pattern.finditer(content):
+            yield m.group(1).strip(), m.start()
 # An equation states a relation, and is worth asking about only if it has
 # structure a model has to reproduce rather than a number it could guess.
 RELATION = re.compile(r"=|\\\\leq|\\\\geq|\\\\le\\b|\\\\ge\\b|<|>")
@@ -126,11 +136,11 @@ def formula_tasks(conn, n, rng):
     for spec, version, number, title, content in rows:
         if not MODERN.match(spec):
             continue
-        for m in DISPLAY_MATH.finditer(content):
-            eq = m.group(1).strip()
+        equations = list(display_equations(content))
+        for eq, offset in equations:
             if not 8 <= len(eq) <= 120 or "\n" in eq:
                 continue
-            stem = content[: m.start()].rstrip().split("\n")[-1].strip()
+            stem = content[:offset].rstrip().split("\n")[-1].strip()
             if len(stem) < 60 or stem.startswith("#") or "$$" in stem:
                 continue
             # The stem has to read as the document's own sentence introducing
@@ -142,9 +152,9 @@ def formula_tasks(conn, n, rng):
             # to reproduce rather than a bare arithmetic result.
             if not RELATION.search(eq) or not STRUCTURE.search(eq):
                 continue
-            # Only equations that are the single display equation of their
-            # section, so "the equation introduced by this sentence" is unique.
-            if len(DISPLAY_MATH.findall(content)) > 6:
+            # Only sections with a handful of equations, so "the equation this
+            # sentence introduces" has one answer.
+            if len(equations) > 6:
                 continue
             cands.append(dict(spec_id=spec, version=version, section=number,
                               section_title=title, stem=stem, eq=eq))

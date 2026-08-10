@@ -57,6 +57,10 @@ def norm_latex(s):
     s = re.sub(r"\\(text|mathrm|mathit)\{([^}]*)\}", r"\2", s)
     s = re.sub(r"\\(left|right|quad|qquad)\b|\\[,;!]", "", s)
     s = WS.sub("", s).replace("\\cdot", "·")
+    # The converter escapes angle brackets in maths: \lt and < are the same.
+    for a, b in (("\\leq", "≤"), ("\\geq", "≥"), ("\\le", "≤"), ("\\ge", "≥"),
+                 ("\\lt", "<"), ("\\gt", ">"), ("\\neq", "≠")):
+        s = s.replace(a, b)
     for _ in range(3):
         s = re.sub(r"\{(\\?[A-Za-z0-9]+)\}", r"\1", s)
     return s.lower()
