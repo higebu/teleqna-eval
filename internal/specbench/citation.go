@@ -66,14 +66,13 @@ func (g *Grader) Citation(r Record) Verdict {
 		return Wrong
 	}
 	index := g.corpus.sections(spec)
-	if len(index) == 0 {
+	if len(index.byKey) == 0 {
 		return NotFound
 	}
-	hit, ok := index[sec]
+	hit, ok := index.byKey[sec]
 	if !ok {
 		return NotFound
 	}
-	title := g.corpus.titleOf(spec, hit.Number)
 
 	if spec == goldSpec && normSec(hit.Number) == normSec(r.GoldSec) {
 		return Exact
@@ -85,7 +84,7 @@ func (g *Grader) Citation(r Record) Verdict {
 			}
 		}
 	}
-	if holdsAnswer(title, g.corpus.contentOf(spec, hit.Number), r) {
+	if holdsAnswer(g.corpus.titleOf(spec, hit.Number), g.corpus.contentOf(spec, hit.Number), r) {
 		return Contains
 	}
 	return Wrong
@@ -136,7 +135,7 @@ func (g *Grader) openapi(r Record) Verdict {
 	// "7.3.5  ThresholdCrossing <<dataType>>" — and the OpenAPI file in the
 	// annex is generated from it. That clause is the citation an implementer
 	// wants, so accept a section this specification titles after the schema.
-	hit, ok := g.corpus.sections(spec)[normSec(api)]
+	hit, ok := g.corpus.sections(spec).byKey[normSec(api)]
 	if !ok {
 		return NotFound
 	}

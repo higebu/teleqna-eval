@@ -169,7 +169,8 @@ func TestTallyRow(t *testing.T) {
 // grading that read only the record and the task.
 func newTestCorpus() *Corpus {
 	return &Corpus{
-		bySpec:  map[string]map[string]sectionEntry{},
+		bySpec:  map[string]*specIndex{},
+		rawIDs:  map[string][]string{},
 		apiDocs: map[string][]string{},
 		res:     map[string]*regexp.Regexp{},
 	}
