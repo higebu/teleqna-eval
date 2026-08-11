@@ -94,6 +94,8 @@ func main() {
 		timeout   = flag.Int("http-timeout", 900, "per-request timeout in seconds")
 		resultMax = flag.Int("tool-result-max", 16000, "max bytes of a tool result")
 		fixedK    = flag.Int("fixedk", 0, "retrieval baseline: one search, top-k sections prepended, no tools (0 = let the model drive its own tool loop)")
+		ctxFile   = flag.String("context", "", "retrieval baseline from a {task id: context} JSON, prepended with no tools attached (bench/openapi_retrieve.py writes these)")
+		ctxLabel  = flag.String("context-label", "context", "retrieval name recorded for -context runs, e.g. openapi-bm25")
 		dbMan     = flag.String("db-manifest", "", "identifier of the pinned database")
 		out       = flag.String("out", "", "JSONL output path")
 	)
@@ -147,10 +149,27 @@ func main() {
 	if *fixedK > 0 && mcp == nil {
 		log.Fatal("-fixedk needs an MCP endpoint to retrieve from")
 	}
+	// A precomputed baseline is still a baseline: it attaches no tools, so the
+	// two cannot both be in play.
+	var contexts map[string]string
+	if *ctxFile != "" {
+		if *fixedK > 0 || mcp != nil {
+			log.Fatal("-context is a baseline of its own: run it without -fixedk and without -mcp")
+		}
+		data, err := os.ReadFile(*ctxFile)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if err := json.Unmarshal(data, &contexts); err != nil {
+			log.Fatalf("%s: %v", *ctxFile, err)
+		}
+	}
 
 	if *out == "" {
 		suffix := "notools"
 		switch {
+		case contexts != nil:
+			suffix = *ctxLabel
 		case *fixedK > 0:
 			suffix = fmt.Sprintf("fixedk%d", *fixedK)
 		case mcp != nil:
@@ -172,6 +191,8 @@ func main() {
 
 	retrievalMode := "none"
 	switch {
+	case contexts != nil:
+		retrievalMode = *ctxLabel
 	case *fixedK > 0:
 		retrievalMode = "fixedk"
 	case mcp != nil:
@@ -181,7 +202,7 @@ func main() {
 		"model": *model, "api": *api, "mcp": *mcpURL, "db_manifest": *dbMan,
 		"tasks": *tasksPath, "started_at": time.Now().UTC().Format(time.RFC3339),
 		"prompt_sha256": sha(systemPrompt), "retrieval": retrievalMode,
-		"fixed_k": strconv.Itoa(*fixedK),
+		"fixed_k": strconv.Itoa(*fixedK), "context_file": *ctxFile,
 	}
 	enc := json.NewEncoder(f)
 	var (
@@ -196,7 +217,7 @@ func main() {
 		go func() {
 			defer wg.Done()
 			for t := range ch {
-				r := run(be, mcp, t, *maxRounds, *resultMax, *fixedK)
+				r := run(be, mcp, t, *maxRounds, *resultMax, *fixedK, contexts[t.ID])
 				r.Meta = meta
 				r.Retrieval = retrievalMode
 				mu.Lock()
@@ -225,13 +246,20 @@ func main() {
 	fmt.Printf("results: %s\n", *out)
 }
 
-func run(be llm.Backend, mcp *mcpclient.Client, t specbench.Task, maxRounds, resultMax, fixedK int) record {
+func run(be llm.Backend, mcp *mcpclient.Client, t specbench.Task, maxRounds, resultMax, fixedK int, prepared string) record {
 	start := time.Now()
 	r := record{ID: t.ID, Type: t.Type, Question: t.Question, Gold: t.Gold,
 		GoldSpec: t.SpecID, GoldSec: goldCitation(t), Usage: map[string]int{}, Retrieved: map[string]int{}}
 
 	user := t.Question
 	agentic := mcp != nil && fixedK == 0
+	if prepared != "" {
+		// A baseline retrieved ahead of time. It is prepended exactly as the
+		// live one is, so the question itself is rendered identically in every
+		// condition.
+		user = prepared + user
+		r.Retrieved["prepared_context"]++
+	}
 	if mcp != nil && fixedK > 0 {
 		// The retrieved text is prepended, so the question itself is rendered
 		// exactly as in every other condition.
