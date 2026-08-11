@@ -25,7 +25,9 @@ clause that does not exist is a different failure from citing the wrong one.
 
 import argparse
 import collections
+import glob
 import json
+import os
 import re
 import sqlite3
 import sys
@@ -197,36 +199,97 @@ def html_rows(content):
     return p.rows
 
 
-SCHEMA_RE = re.compile(r"^    ([A-Za-z][\w]*):\n((?:      .*\n|\n)*)", re.M)
-REQUIRED_RE = re.compile(r"^      required:\n((?:        - \w+\n)+)", re.M)
+
+
+# {task id: task}, for the probes. Populated by load_tasks.
+TASKS = {}
+
+
+def load_tasks(tasks_dir):
+    for path in sorted(glob.glob(os.path.join(tasks_dir, "tasks-*.json"))):
+        for t in json.load(open(path)):
+            TASKS[t["id"]] = t
+
+
+def probed_name(rec):
+    """The element a task was built from: a schema, or an operation.
+
+    It is read from the task's own `probe`, not parsed out of the id — an id
+    holds an API name that may itself contain hyphens, and deriving gold or a
+    verdict from a string split is how this scorer was wrong four times before.
+    """
+    p = TASKS.get(rec["id"], {}).get("probe") or {}
+    if p.get("kind") == "request":
+        return "operation", f"{p['method'].upper()} {p['path']}"
+    if p.get("kind") == "object":
+        return "schema", p.get("owner", "")
+    if p.get("kind") in ("allof", "oneof"):
+        return "schema", p.get("schema", "")
+    # A task from before the probe existed: its id ends in the schema name.
+    return "schema", rec["id"].rsplit("-", 1)[-1]
+
+
+def declares(content, kind, name):
+    """Does this OpenAPI document define that schema, or that operation?"""
+    if not name:
+        return False
+    if kind == "operation":
+        method, _, path = name.partition(" ")
+        # Paths that carry a {placeholder} are usually quoted in these files.
+        m = re.search(rf"^  ['\"]?{re.escape(path)}['\"]?:", content, re.M)
+        if not m:
+            return False
+        rest = content[m.end():]
+        end = re.search(r"^  \S", rest, re.M)
+        return re.search(rf"^    {method.lower()}:", rest[:end.start() if end else len(rest)],
+                         re.M) is not None
+    return re.search(rf"^    {re.escape(name)}:", content, re.M) is not None
+
+
+def element_names(rec):
+    """Names that identify the thing a task is about, besides its document.
+
+    A model that answers "TS 29.518 / UeRegStatusUpdateReqData" has named the
+    schema rather than the API document that declares it. That is a precise and
+    checkable attribution of the same element, and rejecting it would be the
+    same mistake this scorer made four times before: pinning the citation to
+    one location and failing every other true one.
+    """
+    p = TASKS.get(rec["id"], {}).get("probe") or {}
+    return {n for n in (p.get("schema"), p.get("owner")) if n}
 
 
 def grade_openapi(corpus, rec):
-    """OpenAPI schemas are cited by API document, and the same schema may be
-    declared by more than one of them."""
+    """An OpenAPI element is cited by the API document that declares it.
+
+    There is no clause number in an OpenAPI file, so the citation these tasks
+    ask for is the specification and the API document. It counts when that
+    document really declares the schema or operation the question was built
+    from — the same rule as everywhere else in this scorer: the citation has to
+    hold the answer, not merely match a string.
+    """
     spec = norm_spec(rec.get("predicted_spec_id"))
     api = (rec.get("predicted_section") or "").strip()
     if not api:
         return "wrong"
-    name = rec["id"].rsplit("-", 1)[-1]
-    gold = gold_of(rec)
+    kind, name = probed_name(rec)
 
     row = corpus.conn.execute(
         "SELECT content FROM openapi_specs WHERE UPPER(spec_id)=? AND api_name=?",
         (spec, api),
     ).fetchone()
     if row:
-        start = row[0].find("  schemas:")
-        for m in SCHEMA_RE.finditer(row[0][start:]):
-            if m.group(1) != name:
-                continue
-            rm = REQUIRED_RE.search(m.group(2))
-            if not rm:
-                continue
-            props = [l.strip("- \n") for l in rm.group(1).strip().splitlines()]
-            if props == gold:
-                return "exact" if api == rec["gold_section"] else "contains"
+        if declares(row[0], kind, name):
+            return "exact" if api == rec["gold_section"] else "contains"
         return "wrong"
+
+    # The element named instead of the document that declares it.
+    if api in element_names(rec):
+        for (content,) in corpus.conn.execute(
+            "SELECT content FROM openapi_specs WHERE UPPER(spec_id)=?", (spec,)
+        ):
+            if declares(content, "schema", api):
+                return "contains"
 
     # Not an API name. In the SBI specifications the normative definition is a
     # clause of the running text — "6.1.6.2.23  Type: UeContextTransferReqData",
@@ -237,7 +300,7 @@ def grade_openapi(corpus, rec):
     if hit is None:
         return "not_found"
     number, _, _ = hit
-    if re.search(rf"\b{re.escape(name)}\b", corpus.title_of(spec, number)):
+    if name and re.search(rf"\b{re.escape(name)}\b", corpus.title_of(spec, number)):
         return "contains"
     return "wrong"
 
@@ -273,9 +336,12 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--db", required=True)
+    ap.add_argument("--tasks-dir", default="bench",
+                    help="task files, read for the probe each OpenAPI gold was built from")
     ap.add_argument("files", nargs="+")
     args = ap.parse_args()
 
+    load_tasks(args.tasks_dir)
     corpus = Corpus(args.db)
     print("| run | n | answer | citation | answer+citation | exact | ancestor | contains | not found | wrong |")
     print("|---|---|---|---|---|---|---|---|---|---|")
