@@ -264,6 +264,28 @@ Results are written as JSONL under `results/` (one record per question:
 prediction, expectation, tool-call trace, token usage, duration) plus a
 summary line on stdout.
 
+## The specification-grounded benchmark
+
+`bench/` generates questions from a pinned specification database and scores
+the answer *and* the clause it is attributed to.
+
+```bash
+python3 bench/generate.py --db 3gpp-latest.db --verify   # tasks-*.json
+go run ./bench -tasks bench/tasks-asn1.json -model ... -out results/asn1.jsonl
+go run ./bench/grade -db 3gpp-latest.db -tasks-dir bench results/asn1.jsonl
+```
+
+**Running and grading are separate passes, and grading never writes over its
+input.** The run records what the model answered and whether the answer is
+right, which needs nothing but the reply. Whether a citation is right needs the
+corpus — a clause that contains the gold one is a coarser citation rather than
+a wrong one, and a clause that does not exist is a different failure from one
+that does — so `bench/grade` decides it afterwards, writes a `.graded.jsonl`
+beside the input, and stamps each record with the revision that graded it.
+
+The grader reads the database directly rather than through the MCP server: the
+tool under test must not be the one deciding whether its own citation exists.
+
 ## Flags
 
 | Flag | Default | Description |

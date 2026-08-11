@@ -33,6 +33,21 @@ type Task struct {
 	// rather than a clause.
 	APIName      string `json:"api_name,omitempty"`
 	SectionTitle string `json:"section_title"`
+	// Probe is the element the question was generated from. Citations are
+	// graded against it rather than against anything parsed out of the id.
+	Probe *Probe `json:"probe,omitempty"`
+}
+
+// Probe records what an OpenAPI task was built from: which schema, which
+// property of which owner, or which operation.
+type Probe struct {
+	Kind     string `json:"kind"` // request, object, allof, oneof
+	Schema   string `json:"schema"`
+	Owner    string `json:"owner,omitempty"`
+	Property string `json:"property,omitempty"`
+	Path     string `json:"path,omitempty"`
+	Method   string `json:"method,omitempty"`
+	Key      string `json:"key,omitempty"`
 }
 
 // GoldList returns a list-shaped gold: ASN.1 fields in definition order, or the
@@ -130,14 +145,19 @@ func ParseAnswer(text string) (Answer, bool) {
 // Score is one task's outcome. Answer and Citation are deliberately separate:
 // the interesting failure in practice is a plausible answer attributed to the
 // wrong clause.
+//
+// The two halves are filled in by different passes. Grade sets the answer
+// fields during the run, from the reply alone. The citation fields are set
+// afterwards by Grader, which needs the corpus to tell a wrong clause from a
+// coarser one — so on a file that has not been graded they are simply unset,
+// rather than holding a string comparison that would understate the result.
 type Score struct {
 	Answer    bool    `json:"answer_correct"`
-	SpecID    bool    `json:"spec_correct"`
-	Section   bool    `json:"section_correct"`
-	Citation  bool    `json:"citation_correct"` // both of the above
-	Both      bool    `json:"answer_and_citation"`
 	Partial   float64 `json:"partial"` // F1 over ASN.1 fields, 0/1 elsewhere
 	Predicted string  `json:"predicted"`
+	Verdict   Verdict `json:"citation_verdict,omitempty"`
+	Citation  bool    `json:"citation_correct"`
+	Both      bool    `json:"answer_and_citation"`
 }
 
 // kind falls back to the task type, so task files written before answer_kind
@@ -157,11 +177,10 @@ func (t Task) kind() string {
 	return "latex"
 }
 
+// Grade scores the answer. The citation is graded separately, against the
+// corpus, by Grader.
 func Grade(t Task, a Answer) Score {
-	s := Score{
-		SpecID:  normSpec(a.SpecID) == normSpec(t.SpecID),
-		Section: normSection(a.Section) == normSection(t.Section),
-	}
+	var s Score
 	switch t.kind() {
 	case "sequence": // order matters: an ASN.1 definition is ordered
 		got, want := a.Fields(), t.GoldList()
@@ -188,29 +207,17 @@ func Grade(t Task, a Answer) Score {
 		}
 		s.Predicted = got
 	}
-	// An OpenAPI schema is cited by the API document that defines it.
-	if t.APIName != "" {
-		s.Section = normSection(a.Section) == normSection(t.APIName)
-	}
-	// A section title is an acceptable citation when the corpus numbers the
-	// section by name, which 38.331 does for every IE definition.
-	if !s.Section && normSection(a.Section) == normSection(t.SectionTitle) {
-		s.Section = true
-	}
-	s.Citation = s.SpecID && s.Section
-	s.Both = s.Answer && s.Citation
 	return s
 }
 
 var (
-	spaceRe   = regexp.MustCompile(`\s+`)
-	latexCmd  = regexp.MustCompile(`\\(left|right|quad|qquad)\b|\\[,;!]`)
-	textRe    = regexp.MustCompile(`\\(text|mathrm|mathit)\{([^}]*)\}`)
-	braceOne  = regexp.MustCompile(`\{(\\?[A-Za-z0-9]+)\}`)
-	specIDRe  = regexp.MustCompile(`(?i)\b(TS|TR)\s*([0-9]{2}\.[0-9]{3}(?:-[0-9]+)?)`)
-	sectionRe = regexp.MustCompile(`(?i)^(clause|section|sec\.?)\s*`)
-	parenRe   = regexp.MustCompile(`\s*\([^)]*\)\s*$`)
-	numRe     = regexp.MustCompile(`-?\d+`)
+	spaceRe  = regexp.MustCompile(`\s+`)
+	latexCmd = regexp.MustCompile(`\\(left|right|quad|qquad)\b|\\[,;!]`)
+	textRe   = regexp.MustCompile(`\\(text|mathrm|mathit)\{([^}]*)\}`)
+	braceOne = regexp.MustCompile(`\{(\\?[A-Za-z0-9]+)\}`)
+	specIDRe = regexp.MustCompile(`(?i)\b(TS|TR)\s*([0-9]{2}\.[0-9]{3}(?:-[0-9]+)?)`)
+	parenRe  = regexp.MustCompile(`\s*\([^)]*\)\s*$`)
+	numRe    = regexp.MustCompile(`-?\d+`)
 )
 
 // scalarEqual compares a wire code or an element name against its gold.
@@ -280,14 +287,6 @@ func normSpec(s string) string {
 	return strings.ToUpper(spaceRe.ReplaceAllString(strings.TrimSpace(s), " "))
 }
 
-// normSection strips the "clause"/"section" prefix and a trailing dot, so
-// "Clause 6.3.2." and "6.3.2" agree.
-func normSection(s string) string {
-	s = sectionRe.ReplaceAllString(strings.TrimSpace(s), "")
-	s = strings.TrimRight(strings.TrimSpace(s), ".")
-	return strings.ToLower(spaceRe.ReplaceAllString(s, " "))
-}
-
 // normLatex removes the differences that do not change an equation: spacing,
 // sizing commands, \text wrappers and braces around a single token.
 func normLatex(s string) string {
@@ -350,14 +349,11 @@ func f1(got, want []string) float64 {
 	return 2 * p * r / (p + r)
 }
 
-// Summary aggregates scores for reporting.
+// Summary is a run's progress as the runner sees it: answers only, because
+// the citation is not graded until the corpus pass.
 type Summary struct {
 	N        int
 	Answer   int
-	Citation int
-	Both     int
-	SpecID   int
-	Section  int
 	Partial  float64
 	Answered int
 }
@@ -370,18 +366,6 @@ func (s *Summary) Add(sc Score, answered bool) {
 	if sc.Answer {
 		s.Answer++
 	}
-	if sc.Citation {
-		s.Citation++
-	}
-	if sc.Both {
-		s.Both++
-	}
-	if sc.SpecID {
-		s.SpecID++
-	}
-	if sc.Section {
-		s.Section++
-	}
 	s.Partial += sc.Partial
 }
 
@@ -390,9 +374,8 @@ func (s Summary) String() string {
 		return "no tasks"
 	}
 	pct := func(n int) float64 { return 100 * float64(n) / float64(s.N) }
-	return fmt.Sprintf(
-		"n=%d answered=%d | answer %.1f%% | spec %.1f%% | section %.1f%% | citation %.1f%% | answer+citation %.1f%% | partial %.2f",
-		s.N, s.Answered, pct(s.Answer), pct(s.SpecID), pct(s.Section), pct(s.Citation), pct(s.Both), s.Partial/float64(s.N))
+	return fmt.Sprintf("n=%d answered=%d | answer %.1f%% | partial %.2f (citation: run bench/grade)",
+		s.N, s.Answered, pct(s.Answer), s.Partial/float64(s.N))
 }
 
 // SortTasks keeps runs comparable regardless of file order.

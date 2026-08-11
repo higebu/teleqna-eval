@@ -43,27 +43,6 @@ The citation is part of the answer: it must be where this is actually defined.`
 
 const retryPrompt = `Your reply did not contain the JSON object. Reply now with the JSON object only, in the format given above.`
 
-type record struct {
-	ID        string            `json:"id"`
-	Type      string            `json:"type"`
-	Question  string            `json:"question"`
-	Gold      json.RawMessage   `json:"gold"`
-	GoldSpec  string            `json:"gold_spec_id"`
-	GoldSec   string            `json:"gold_section"`
-	Score     specbench.Score   `json:"score"`
-	PredSpec  string            `json:"predicted_spec_id"`
-	PredSec   string            `json:"predicted_section"`
-	Rounds    int               `json:"rounds"`
-	ToolCalls []toolCall        `json:"tool_calls"`
-	Usage     map[string]int    `json:"usage"`
-	Duration  float64           `json:"duration_sec"`
-	Final     string            `json:"final_message"`
-	Error     string            `json:"error,omitempty"`
-	Retrieval string            `json:"retrieval"`
-	Meta      map[string]string `json:"meta"`
-	Retrieved map[string]int    `json:"retrieved,omitempty"`
-}
-
 // goldCitation is the clause a task was generated from, or the API document for
 // an OpenAPI schema, which is cited by name rather than by clause.
 func goldCitation(t specbench.Task) string {
@@ -71,12 +50,6 @@ func goldCitation(t specbench.Task) string {
 		return t.APIName
 	}
 	return t.Section
-}
-
-type toolCall struct {
-	Name   string `json:"name"`
-	Args   string `json:"args"`
-	Result string `json:"result,omitempty"`
 }
 
 func main() {
@@ -227,8 +200,8 @@ func main() {
 				}
 				sum[t.Type].Add(r.Score, r.Final != "")
 				done++
-				log.Printf("[%d/%d] %s: answer=%v citation=%v (%d tool calls, %.0fs)",
-					done, len(tasks), t.ID, r.Score.Answer, r.Score.Citation, len(r.ToolCalls), r.Duration)
+				log.Printf("[%d/%d] %s: answer=%v (%d tool calls, %.0fs)",
+					done, len(tasks), t.ID, r.Score.Answer, len(r.ToolCalls), r.Duration)
 				mu.Unlock()
 			}
 		}()
@@ -246,9 +219,9 @@ func main() {
 	fmt.Printf("results: %s\n", *out)
 }
 
-func run(be llm.Backend, mcp *mcpclient.Client, t specbench.Task, maxRounds, resultMax, fixedK int, prepared string) record {
+func run(be llm.Backend, mcp *mcpclient.Client, t specbench.Task, maxRounds, resultMax, fixedK int, prepared string) specbench.Record {
 	start := time.Now()
-	r := record{ID: t.ID, Type: t.Type, Question: t.Question, Gold: t.Gold,
+	r := specbench.Record{ID: t.ID, Type: t.Type, Question: t.Question, Gold: t.Gold,
 		GoldSpec: t.SpecID, GoldSec: goldCitation(t), Usage: map[string]int{}, Retrieved: map[string]int{}}
 
 	user := t.Question
@@ -266,7 +239,7 @@ func run(be llm.Backend, mcp *mcpclient.Client, t specbench.Task, maxRounds, res
 		ctx, calls := retrieval.FixedK(mcp, t.Question, fixedK, resultMax)
 		user = ctx + user
 		for _, c := range calls {
-			r.ToolCalls = append(r.ToolCalls, toolCall{Name: c.Name, Args: c.Args, Result: c.Result})
+			r.ToolCalls = append(r.ToolCalls, specbench.ToolCall{Name: c.Name, Args: c.Args, Result: c.Result})
 			r.Retrieved[c.Name]++
 		}
 	}
@@ -313,7 +286,7 @@ func run(be llm.Backend, mcp *mcpclient.Client, t specbench.Task, maxRounds, res
 			}
 			text = retrieval.Truncate(text, resultMax)
 			c.AddToolResult(tc, text)
-			r.ToolCalls = append(r.ToolCalls, toolCall{Name: tc.Function.Name, Args: tc.Function.Arguments, Result: text})
+			r.ToolCalls = append(r.ToolCalls, specbench.ToolCall{Name: tc.Function.Name, Args: tc.Function.Arguments, Result: text})
 			r.Retrieved[tc.Function.Name]++
 		}
 	}

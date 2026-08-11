@@ -66,7 +66,7 @@ func TestGradeASN1(t *testing.T) {
 	task := asn1Task()
 
 	right := answer(t, `{"answer": ["fieldA","fieldB","fieldC"], "spec_id": "TS 38.331", "section": "PDCP-Config"}`)
-	if s := Grade(task, right); !s.Answer || !s.Citation || !s.Both || s.Partial != 1 {
+	if s := Grade(task, right); !s.Answer || s.Partial != 1 {
 		t.Errorf("exact answer scored %+v", s)
 	}
 
@@ -83,27 +83,13 @@ func TestGradeASN1(t *testing.T) {
 		t.Errorf("partly right answer scored %+v", s)
 	}
 
-	// The failure that matters most in practice: a right answer attributed to
-	// the wrong clause must not count as a usable result.
+	// Grade scores the answer only. The failure that matters most in practice
+	// — a right answer attributed to the wrong clause — is caught by Grader,
+	// which can tell a wrong clause from a coarser one; a run that has not
+	// been graded leaves the citation unset rather than guessing at it.
 	misplaced := answer(t, `{"answer": ["fieldA","fieldB","fieldC"], "spec_id": "TS 38.331", "section": "9.9.9"}`)
 	if s := Grade(task, misplaced); !s.Answer || s.Citation || s.Both {
-		t.Errorf("right answer with a wrong citation scored %+v", s)
-	}
-}
-
-func TestCitationNormalisation(t *testing.T) {
-	task := asn1Task()
-	task.Section = "6.3.2"
-	for _, cite := range []string{"6.3.2", "Clause 6.3.2", "section 6.3.2", " 6.3.2. "} {
-		a := Answer{Answer: json.RawMessage(`[]`), SpecID: "ts38.331", Section: cite}
-		if s := Grade(task, a); !s.SpecID || !s.Section {
-			t.Errorf("citation %q scored spec=%v section=%v", cite, s.SpecID, s.Section)
-		}
-	}
-	// A specification the model names with a version suffix is still that spec.
-	a := Answer{Answer: json.RawMessage(`[]`), SpecID: "TS 38.331 v19.3.0", Section: "6.3.2"}
-	if s := Grade(task, a); !s.SpecID {
-		t.Error("version suffix broke the spec match")
+		t.Errorf("Grade must not decide a citation: %+v", s)
 	}
 }
 
@@ -128,9 +114,9 @@ func TestGradeFormulaIgnoresCosmeticLatex(t *testing.T) {
 
 func TestSummary(t *testing.T) {
 	var s Summary
-	s.Add(Score{Answer: true, SpecID: true, Section: true, Citation: true, Both: true, Partial: 1}, true)
+	s.Add(Score{Answer: true, Partial: 1}, true)
 	s.Add(Score{}, false)
-	if s.N != 2 || s.Answer != 1 || s.Both != 1 || s.Answered != 1 {
+	if s.N != 2 || s.Answer != 1 || s.Answered != 1 {
 		t.Errorf("summary = %+v", s)
 	}
 	if got := s.String(); got == "" {
@@ -175,15 +161,11 @@ func TestGradeSet(t *testing.T) {
 	ans := func(a string) Answer {
 		return Answer{Answer: json.RawMessage(a), SpecID: "TS 29.510", Section: "Nnrf_NFManagement"}
 	}
-	if s := Grade(tk, ans(`["c","a","b"]`)); !s.Answer || !s.Both {
+	if s := Grade(tk, ans(`["c","a","b"]`)); !s.Answer {
 		t.Errorf("reordered set scored %+v", s)
 	}
 	if s := Grade(tk, ans(`["a","b"]`)); s.Answer || s.Partial == 0 {
 		t.Errorf("subset scored %+v, want wrong with partial credit", s)
-	}
-	// An OpenAPI citation names the API document, not a clause.
-	if s := Grade(tk, Answer{Answer: json.RawMessage(`["a","b","c"]`), SpecID: "TS 29.510", Section: "6.1.6.2.2"}); s.Citation {
-		t.Error("a clause number was accepted as an OpenAPI citation")
 	}
 }
 
