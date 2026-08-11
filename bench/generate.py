@@ -131,7 +131,8 @@ def formula_tasks(conn, n, rng):
     sentence as the stem so the task is stated in the document's own words."""
     cands = []
     rows = conn.execute(
-        "SELECT spec_id,version,number,title,content FROM sections WHERE content LIKE '%$$%'"
+        "SELECT spec_id,version,number,title,content FROM sections "
+        "WHERE content LIKE '%```latex%' OR content LIKE '%$$%'"
     )
     for spec, version, number, title, content in rows:
         if not MODERN.match(spec):
