@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -63,6 +64,25 @@ func (t Task) GoldString() string {
 	var s string
 	_ = json.Unmarshal(t.Gold, &s)
 	return s
+}
+
+// LoadTaskDir reads every tasks-*.json in a directory, which is how both the
+// grader and its benchmarks get at the probes.
+func LoadTaskDir(dir string) ([]Task, error) {
+	paths, err := filepath.Glob(filepath.Join(dir, "tasks-*.json"))
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(paths)
+	var out []Task
+	for _, p := range paths {
+		t, err := Load(p)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, t...)
+	}
+	return out, nil
 }
 
 func Load(path string) ([]Task, error) {

@@ -17,7 +17,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
-	"sort"
 	"strings"
 
 	"teleqna-eval/internal/specbench"
@@ -42,7 +41,7 @@ func main() {
 	}
 	defer corpus.Close()
 
-	tasks, err := loadTasks(*tasksDir)
+	tasks, err := specbench.LoadTaskDir(*tasksDir)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -99,23 +98,6 @@ func outPath(path, dir, suffix string) string {
 
 func runName(path string) string {
 	return strings.TrimSuffix(strings.TrimPrefix(filepath.Base(path), "bench-"), ".jsonl")
-}
-
-func loadTasks(dir string) ([]specbench.Task, error) {
-	paths, err := filepath.Glob(filepath.Join(dir, "tasks-*.json"))
-	if err != nil {
-		return nil, err
-	}
-	sort.Strings(paths)
-	var out []specbench.Task
-	for _, p := range paths {
-		t, err := specbench.Load(p)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, t...)
-	}
-	return out, nil
 }
 
 // graderVersion stamps each record with the revision that graded it, so a

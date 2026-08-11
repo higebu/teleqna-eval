@@ -286,6 +286,18 @@ beside the input, and stamps each record with the revision that graded it.
 The grader reads the database directly rather than through the MCP server: the
 tool under test must not be the one deciding whether its own citation exists.
 
+Its cost is in how the corpus is asked for a row, not in any Go function, so
+the benchmarks run against a real database and skip without one:
+
+```bash
+SPECBENCH_DB=3gpp-latest.db go test ./internal/specbench -bench . -benchtime 20x -run XXX
+```
+
+`BenchmarkAccessPath` compares the two ways to match a specification id. They
+return the same row, and the one that wraps the column in `UPPER()` takes about
+10,000 times longer because it reads all 545,003 sections to do it. Grading
+issued that query per record until it was measured.
+
 ## Flags
 
 | Flag | Default | Description |
