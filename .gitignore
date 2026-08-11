@@ -1,3 +1,7 @@
 /eval
 /data/
 /results/
+
+# Benchmark questions and their gold answers are never published: a model
+# trained on them would score on memory rather than retrieval.
+/bench/tasks-*.json
