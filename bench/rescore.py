@@ -203,6 +203,8 @@ def html_rows(content):
 
 # {task id: task}, for the probes. Populated by load_tasks.
 TASKS = {}
+ALLOF_CACHE = {}
+ALLOF_DB = None
 
 
 def load_tasks(tasks_dir):
@@ -211,22 +213,59 @@ def load_tasks(tasks_dir):
             TASKS[t["id"]] = t
 
 
-def probed_name(rec):
-    """The element a task was built from: a schema, or an operation.
+def citation_targets(rec):
+    """Every element whose declaration would justify this answer.
 
-    It is read from the task's own `probe`, not parsed out of the id — an id
-    holds an API name that may itself contain hyphens, and deriving gold or a
-    verdict from a string split is how this scorer was wrong four times before.
+    An OpenAPI question points at one schema and its answer is defined in
+    another: "the property `tgtUe` of `EventSubsc` holds an object, list its
+    fields" is asked of TS 29.530, and answered by the definition of
+    `TargetUeInformation`, which lives in TS 29.571 CommonData. Both documents
+    are true citations — one is where the question is posed, the other is where
+    the answer is written — and a scorer that accepts only the first marks the
+    condition that actually followed the reference as wrong.
+
+    Read from the task's own `probe`, never parsed out of the id: an id holds
+    an API name that may itself contain hyphens, and deriving a verdict from a
+    string split is how this scorer was wrong before.
     """
     p = TASKS.get(rec["id"], {}).get("probe") or {}
-    if p.get("kind") == "request":
-        return "operation", f"{p['method'].upper()} {p['path']}"
-    if p.get("kind") == "object":
-        return "schema", p.get("owner", "")
-    if p.get("kind") in ("allof", "oneof"):
-        return "schema", p.get("schema", "")
+    kind = p.get("kind")
+    if kind == "request":
+        # The operation, and the schema its body carries.
+        return [("operation", f"{p['method'].upper()} {p['path']}"), ("schema", p.get("schema"))]
+    if kind == "object":
+        return [("schema", p.get("owner")), ("schema", p.get("schema"))]
+    if kind == "oneof":
+        # The schema that declares the choice, and the alternatives themselves,
+        # which are the answer.
+        return [("schema", p.get("schema"))] + [("schema", g) for g in gold_of(rec)]
+    if kind == "allof":
+        return [("schema", p.get("schema"))] + [("schema", m) for m in allof_members(rec)]
     # A task from before the probe existed: its id ends in the schema name.
-    return "schema", rec["id"].rsplit("-", 1)[-1]
+    return [("schema", rec["id"].rsplit("-", 1)[-1])]
+
+
+ALLOF_REF = re.compile(r"\$ref:\s*'?\"?[^'\"\s#]*#/components/schemas/([\w.-]+)")
+
+
+def allof_members(rec):
+    """The schemas an allOf composes, read out of the gold document."""
+    task = TASKS.get(rec["id"], {})
+    row = ALLOF_CACHE.get(rec["id"], ...)
+    if row is not ...:
+        return row
+    members = []
+    r = ALLOF_DB.execute(
+        "SELECT content FROM openapi_specs WHERE spec_id=? AND api_name=?",
+        (task.get("spec_id"), task.get("api_name")),
+    ).fetchone() if ALLOF_DB else None
+    if r:
+        m = re.search(rf"^    {re.escape((task.get('probe') or {}).get('schema', ''))}:\n"
+                      r"((?:      .*\n|\n)*)", r[0], re.M)
+        if m:
+            members = ALLOF_REF.findall(m.group(1))
+    ALLOF_CACHE[rec["id"]] = members
+    return members
 
 
 def declares(content, kind, name):
@@ -272,19 +311,19 @@ def grade_openapi(corpus, rec):
     api = (rec.get("predicted_section") or "").strip()
     if not api:
         return "wrong"
-    kind, name = probed_name(rec)
+    targets = [(k, n) for k, n in citation_targets(rec) if n]
 
     row = corpus.conn.execute(
         "SELECT content FROM openapi_specs WHERE UPPER(spec_id)=? AND api_name=?",
         (spec, api),
     ).fetchone()
     if row:
-        if declares(row[0], kind, name):
+        if any(declares(row[0], k, n) for k, n in targets):
             return "exact" if api == rec["gold_section"] else "contains"
         return "wrong"
 
     # The element named instead of the document that declares it.
-    if api in element_names(rec):
+    if any(api == n for _, n in targets):
         for (content,) in corpus.conn.execute(
             "SELECT content FROM openapi_specs WHERE UPPER(spec_id)=?", (spec,)
         ):
@@ -300,7 +339,8 @@ def grade_openapi(corpus, rec):
     if hit is None:
         return "not_found"
     number, _, _ = hit
-    if name and re.search(rf"\b{re.escape(name)}\b", corpus.title_of(spec, number)):
+    if any(n and re.search(rf"\b{re.escape(n)}\b", corpus.title_of(spec, number))
+           for _, n in targets):
         return "contains"
     return "wrong"
 
@@ -343,6 +383,8 @@ def main():
 
     load_tasks(args.tasks_dir)
     corpus = Corpus(args.db)
+    global ALLOF_DB
+    ALLOF_DB = corpus.conn
     print("| run | n | answer | citation | answer+citation | exact | ancestor | contains | not found | wrong |")
     print("|---|---|---|---|---|---|---|---|---|---|")
     for path in args.files:
