@@ -36,6 +36,9 @@ import sqlite3
 import sys
 from html.parser import HTMLParser
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import openapi_tasks  # noqa: E402  the 5G SBI generators, which need a YAML parser
+
 ASN1_FENCE = re.compile(r"```asn1\n(.*?)```", re.S)
 # The head of a definition at column 0, e.g. "PDCP-Config ::= SEQUENCE {".
 ASN1_HEAD = re.compile(r"^([A-Za-z][\w-]*)\s*::=\s*SEQUENCE\s*\{", re.M)
@@ -303,57 +306,15 @@ def code_tasks(conn, n, rng, key=None):
     return cands[:n]
 
 
-# A schema body indented four spaces under "  schemas:", and its required list.
-SCHEMA_RE = re.compile(r"^    ([A-Za-z][\w]*):\n((?:      .*\n|\n)*)", re.M)
-REQUIRED_RE = re.compile(r"^      required:\n((?:        - \w+\n)+)", re.M)
+_OPENAPI_STORE = None
 
 
-def _openapi_schemas(conn):
-    """{schema name: [(spec, api, required properties)]} over every API file."""
-    owners = collections.defaultdict(list)
-    for spec, api, content in conn.execute("SELECT spec_id, api_name, content FROM openapi_specs"):
-        start = content.find("  schemas:")
-        if start < 0:
-            continue
-        for m in SCHEMA_RE.finditer(content[start:]):
-            rm = REQUIRED_RE.search(m.group(2))
-            if not rm:
-                continue
-            props = [line.strip("- \n") for line in rm.group(1).strip().splitlines()]
-            if 2 <= len(props) <= 8:
-                owners[m.group(1)].append((spec, api, props))
-    return owners
-
-
-def openapi_tasks(conn, n, rng):
-    """Required properties of a 5G SBI schema.
-
-    These definitions are not in the full-text index at all — they live in their
-    own table, reachable only through list_openapi/get_openapi — so this is the
-    one task type a search-only baseline cannot reach.
-    """
-    owners = _openapi_schemas(conn)
-    unique = sorted((k, v[0]) for k, v in owners.items() if len(v) == 1)
-    rng.shuffle(unique)
-
-    tasks = []
-    for name, (spec, api, props) in unique[:n]:
-        tasks.append({
-            "id": f"openapi-{api}-{name}",
-            "type": "openapi",
-            "answer_kind": "set",
-            "question": (
-                f"In the 3GPP 5G service based interface APIs, the OpenAPI schema {name!r} "
-                f"declares a list of required properties. List them."
-            ),
-            "gold": props,
-            "spec_id": spec,
-            "version": "",
-            "section": api,
-            "section_title": api,
-            "api_name": api,
-        })
-    return tasks
+def _openapi_store(conn):
+    """Parsing 477 YAML documents takes a few seconds, so do it once."""
+    global _OPENAPI_STORE
+    if _OPENAPI_STORE is None:
+        _OPENAPI_STORE = openapi_tasks.Store(conn)
+    return _OPENAPI_STORE
 
 
 def verify(conn, tasks):
@@ -378,21 +339,10 @@ def verify(conn, tasks):
             if row is None or want != gold:
                 bad.append((t["id"], gold, want))
         elif kind == "openapi":
-            row = conn.execute(
-                "SELECT content FROM openapi_specs WHERE spec_id=? AND api_name=?",
-                (t["spec_id"], t["api_name"]),
-            ).fetchone()
-            ok = False
-            if row:
-                start = row[0].find("  schemas:")
-                name = t["id"].rsplit("-", 1)[-1]
-                for m in SCHEMA_RE.finditer(row[0][start:]):
-                    if m.group(1) != name:
-                        continue
-                    rm = REQUIRED_RE.search(m.group(2))
-                    ok = bool(rm) and [l.strip("- \n") for l in rm.group(1).strip().splitlines()] == gold
-                if not ok:
-                    bad.append((t["id"], gold, "not re-derivable"))
+            store = _openapi_store(conn)
+            got = openapi_tasks.rederive(store, t)
+            if got != gold:
+                bad.append((t["id"], gold, got))
         else:
             row = conn.execute(
                 "SELECT content FROM sections WHERE spec_id=? AND number=?",
@@ -425,15 +375,28 @@ def main():
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--verify", action="store_true",
                     help="re-derive every gold from the database and fail if any does not match")
+    ap.add_argument("--only", default="",
+                    help="comma-separated task names to regenerate; the others are left "
+                         "alone. The asn1 and formula scans read every clause in the "
+                         "corpus, so iterating on one generator is much faster with this")
     args = ap.parse_args()
 
     conn = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
     os.makedirs(args.out, exist_ok=True)
-    generators = [("asn1", asn1_tasks), ("formula", formula_tasks), ("openapi", openapi_tasks)]
+    generators = [("asn1", asn1_tasks), ("formula", formula_tasks)]
+    for name, fn in openapi_tasks.GENERATORS.items():
+        generators.append((name, lambda c, n, r, f=fn: f(_openapi_store(c), n, r)))
     # One file per protocol: a single "code" pool would be swamped by the
     # Diameter registry, which alone has 1719 usable rows.
     for key in sorted({e["key"] for e in CODE_TABLES}):
         generators.append((key, lambda c, n, r, k=key: code_tasks(c, n, r, key=k)))
+    only = {s.strip() for s in args.only.split(",") if s.strip()}
+    if only:
+        unknown = only - {name for name, _ in generators}
+        if unknown:
+            print(f"--only: no such task type: {', '.join(sorted(unknown))}", file=sys.stderr)
+            return 2
+        generators = [(name, fn) for name, fn in generators if name in only]
     failures = 0
     for name, fn in generators:
         tasks = fn(conn, args.n, random.Random(args.seed))
