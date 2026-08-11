@@ -296,7 +296,13 @@ SPECBENCH_DB=3gpp-latest.db go test ./internal/specbench -bench . -benchtime 20x
 `BenchmarkAccessPath` compares the two ways to match a specification id. They
 return the same row, and the one that wraps the column in `UPPER()` takes about
 10,000 times longer because it reads all 545,003 sections to do it. Grading
-issued that query per record until it was measured.
+issued that query per record until it was measured: on the 18 `v2-*` runs, warm
+page cache, three repeats, that is **356.5s before and 1.24s after**.
+
+The Python scorer this replaced issued the same query and cost **372.9s** on the
+same files — the two were within 7% of each other, in both directions depending
+on the file mix. Neither implementation was slow because of its language, and a
+comparison between them was never the interesting measurement.
 
 ## Flags
 
