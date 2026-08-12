@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -109,5 +110,84 @@ func TestWriteMeta(t *testing.T) {
 	}
 	if m.RunID != "r1" || m.PromptID != "teleqna" || m.Model != "m" {
 		t.Errorf("meta = %+v", m)
+	}
+}
+
+// A run killed mid-write leaves a partial final line. Appending to it would
+// glue the next record onto those bytes and every line-at-a-time reader would
+// stop there, so the torn record is truncated away and its question replanned.
+func TestPlanResumeRepairsATornTail(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "out.jsonl")
+	writeRecords(t, path, eval.Result{ID: "question 1", Attempt: 1})
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(`{"id":"question 2","corr`); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	jobs, err := plan(planQuestions, 1, path, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs) != 1 || jobs[0].Q.ID != "question 2" {
+		t.Fatalf("jobs = %+v, want only question 2", jobs)
+	}
+	// The file must now end at the last whole record, so what is appended next
+	// is readable.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := bytes.Count(data, []byte{'\n'}); n != 1 || !bytes.HasSuffix(data, []byte{'\n'}) {
+		t.Errorf("file did not end at the last whole record: %q", data)
+	}
+}
+
+// A malformed line that is not the last one is not a torn write; repairing it
+// would throw away good records after it.
+func TestPlanResumeRejectsAMalformedMiddle(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "out.jsonl")
+	if err := os.WriteFile(path, []byte("{\"id\":\"question 1\"}\nnot json\n{\"id\":\"question 2\"}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := plan(planQuestions, 1, path, true); err == nil {
+		t.Error("want an error for a malformed line in the middle")
+	}
+}
+
+// plan matches records by (question, repeat) alone, so a resume pointed at
+// another run's output would reuse its answers under this run's metadata.
+func TestCheckResume(t *testing.T) {
+	dir := t.TempDir()
+	base := meta{Model: "m", API: "chat", Retrieval: "agentic", PromptID: "teleqna",
+		PromptSHA: "abc", MaxRounds: 20, Seed: 42, Questions: 1509, DBManifest: "v2",
+		Out: "results/out.jsonl"}
+
+	path := filepath.Join(dir, "none.meta.json")
+	if err := checkResume(path, base); err != nil {
+		t.Errorf("no existing metadata should be allowed: %v", err)
+	}
+
+	path = filepath.Join(dir, "out.meta.json")
+	if err := writeMeta(path, base); err != nil {
+		t.Fatal(err)
+	}
+	same := base
+	same.RunID, same.StartedAt, same.HarnessSHA, same.Repeat = "later", "now", "deadbeef", 3
+	if err := checkResume(path, same); err != nil {
+		t.Errorf("only the free fields differ, want no error: %v", err)
+	}
+	for name, m := range map[string]meta{
+		"model":       func() meta { m := base; m.Model = "other"; return m }(),
+		"prompt":      func() meta { m := base; m.PromptSHA = "def"; return m }(),
+		"retrieval":   func() meta { m := base; m.Retrieval = "fixedk"; return m }(),
+		"db_manifest": func() meta { m := base; m.DBManifest = "v3"; return m }(),
+	} {
+		if err := checkResume(path, m); err == nil {
+			t.Errorf("%s differs, want an error", name)
+		}
 	}
 }

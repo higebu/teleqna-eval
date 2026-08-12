@@ -5,6 +5,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -233,6 +234,11 @@ func main() {
 		Out: *outPath, Trace: *tracePath,
 	}
 	metaPath := strings.TrimSuffix(*outPath, ".jsonl") + ".meta.json"
+	if *resume {
+		if err := checkResume(metaPath, m); err != nil {
+			log.Fatal(err)
+		}
+	}
 	if err := writeMeta(metaPath, m); err != nil {
 		log.Fatal(err)
 	}
@@ -269,25 +275,17 @@ func plan(qs []teleqna.Question, repeat int, outPath string, resume bool) ([]eva
 	done := map[key]bool{}
 	attempts := map[key]int{}
 	if resume {
-		f, err := os.Open(outPath)
-		if err != nil && !os.IsNotExist(err) {
+		records, err := readRecords(outPath)
+		if err != nil {
 			return nil, err
 		}
-		if err == nil {
-			defer f.Close()
-			dec := json.NewDecoder(f)
-			for {
-				var r eval.Result
-				if err := dec.Decode(&r); err != nil {
-					break
-				}
-				k := key{r.ID, r.RepeatIdx}
-				if r.Attempt > attempts[k] {
-					attempts[k] = r.Attempt
-				}
-				if r.Error == "" {
-					done[k] = true
-				}
+		for _, r := range records {
+			k := key{r.ID, r.RepeatIdx}
+			if r.Attempt > attempts[k] {
+				attempts[k] = r.Attempt
+			}
+			if r.Error == "" {
+				done[k] = true
 			}
 		}
 	}
@@ -302,6 +300,102 @@ func plan(qs []teleqna.Question, repeat int, outPath string, resume bool) ([]eva
 		}
 	}
 	return jobs, nil
+}
+
+// readRecords reads a results file for -resume, and repairs a torn tail.
+//
+// A run killed mid-write leaves a partial final line. Appending to the file
+// then glues new records onto those bytes, and every reader that parses a line
+// at a time stops there — the resumed results are written but cannot be read.
+// A malformed *last* line is therefore truncated away: it holds no answer, and
+// the question it belonged to is replanned like any other missing one. A
+// malformed line anywhere else is not a torn write, so it is an error rather
+// than something to repair silently.
+func readRecords(path string) ([]eval.Result, error) {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var (
+		out  []eval.Result
+		good int // bytes through the last record that parsed
+	)
+	lines := bytes.SplitAfter(data, []byte{'\n'})
+	for i, line := range lines {
+		if len(bytes.TrimSpace(line)) == 0 {
+			good += len(line)
+			continue
+		}
+		var r eval.Result
+		if err := json.Unmarshal(line, &r); err != nil {
+			if i != len(lines)-1 {
+				return nil, fmt.Errorf("%s: line %d is not a record: %w", path, i+1, err)
+			}
+			log.Printf("%s: discarding a torn final record of %d bytes", path, len(line))
+			return out, os.Truncate(path, int64(good))
+		}
+		good += len(line)
+		out = append(out, r)
+	}
+	return out, nil
+}
+
+// checkResume refuses to append to a file measured under different settings.
+//
+// plan matches records by (question, repeat) alone, so a resume pointed at
+// another run's output would reuse its answers and then stamp them with this
+// invocation's metadata — a file that reads as one measurement and is two. The
+// fields compared are the ones that decide what an answer means; the run id,
+// timestamp, harness commit, base URL and repeat count are free to differ,
+// since -repeat is how a resume adds passes in the first place.
+func checkResume(metaPath string, m meta) error {
+	data, err := os.ReadFile(metaPath)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var old meta
+	if err := json.Unmarshal(data, &old); err != nil {
+		return fmt.Errorf("%s: %w", metaPath, err)
+	}
+	temp := func(t *float64) string {
+		if t == nil {
+			return "unset"
+		}
+		return fmt.Sprint(*t)
+	}
+	var diff []string
+	for _, f := range []struct{ name, was, now string }{
+		{"model", old.Model, m.Model},
+		{"api", old.API, m.API},
+		{"retrieval", old.Retrieval, m.Retrieval},
+		{"fixed_k", fmt.Sprint(old.FixedK), fmt.Sprint(m.FixedK)},
+		{"prompt_id", old.PromptID, m.PromptID},
+		{"prompt_sha256", old.PromptSHA, m.PromptSHA},
+		{"max_tokens", fmt.Sprint(old.MaxTokens), fmt.Sprint(m.MaxTokens)},
+		{"max_rounds", fmt.Sprint(old.MaxRounds), fmt.Sprint(m.MaxRounds)},
+		{"temperature", temp(old.Temperature), temp(m.Temperature)},
+		{"filter", old.Filter, m.Filter},
+		{"category", old.Category, m.Category},
+		{"seed", fmt.Sprint(old.Seed), fmt.Sprint(m.Seed)},
+		{"questions", fmt.Sprint(old.Questions), fmt.Sprint(m.Questions)},
+		{"db_manifest", old.DBManifest, m.DBManifest},
+	} {
+		if f.was != f.now {
+			diff = append(diff, fmt.Sprintf("  %s: %q -> %q", f.name, f.was, f.now))
+		}
+	}
+	if len(diff) > 0 {
+		return fmt.Errorf("-resume: %s was measured with different settings, so its records "+
+			"are not this run's:\n%s\nwrite to a different -out, or drop -resume to start over",
+			m.Out, strings.Join(diff, "\n"))
+	}
+	return nil
 }
 
 func openOut(path string, appendTo bool) (*os.File, error) {
