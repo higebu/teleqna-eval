@@ -340,6 +340,20 @@ func readRecords(path string) ([]eval.Result, error) {
 		good += len(line)
 		out = append(out, r)
 	}
+	// A complete record whose trailing newline never reached the disk parses
+	// fine, so the loop above keeps it — but the next append would land on the
+	// same line and glue two objects together. Terminate it before anything is
+	// written after it.
+	if len(data) > 0 && data[len(data)-1] != '\n' {
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			return nil, err
+		}
+		defer f.Close()
+		if _, err := f.WriteString("\n"); err != nil {
+			return nil, err
+		}
+	}
 	return out, nil
 }
 

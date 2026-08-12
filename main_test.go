@@ -214,3 +214,28 @@ func TestCheckResumeRefusesRecordsWithoutMetadata(t *testing.T) {
 		t.Error("records with no metadata, want an error")
 	}
 }
+
+// A complete record whose trailing newline never reached the disk parses fine,
+// so it must be kept — but the next append would otherwise land on the same
+// line and glue two objects together.
+func TestPlanResumeTerminatesAnUnterminatedRecord(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "out.jsonl")
+	if err := os.WriteFile(path, []byte(`{"id":"question 1","attempt":1}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	jobs, err := plan(planQuestions, 1, path, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs) != 1 || jobs[0].Q.ID != "question 2" {
+		t.Fatalf("jobs = %+v, want only question 2: the whole record must be kept", jobs)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.HasSuffix(data, []byte{'\n'}) {
+		t.Errorf("file does not end in a newline, the next append would glue onto it: %q", data)
+	}
+}
