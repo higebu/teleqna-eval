@@ -142,6 +142,45 @@ func TestElementName(t *testing.T) {
 	}
 }
 
+func TestHoldsAnswerNGAP(t *testing.T) {
+	// The clause that states the value is the citation. The message clause the
+	// question names points at another clause for the ASN.1 and holds neither
+	// notation, so naming it is not one — and the IE clause writes the bound as
+	// a power where the ASN.1 writes it out, which is the difference the gold
+	// was chosen to separate.
+	gold, _ := json.Marshal("1099511627775")
+	r := Record{ID: "ngap-asn1-amfuengapid", Type: "ngapasn1", Gold: gold}
+	asn1 := "AMF-UE-NGAP-ID ::= INTEGER (0..1099511627775)"
+	ieClause := "<table><tbody><tr><td><p>AMF UE NGAP ID</p></td>" +
+		"<td><p>INTEGER (0..2<sup>40 </sup>-1)</p></td></tr></tbody></table>"
+	msgClause := "<table><tbody><tr><td><p>AMF UE NGAP ID</p></td><td><p>9.3.3.1</p></td></tr></tbody></table>"
+	for name, c := range map[string]struct {
+		content string
+		want    bool
+	}{
+		"ASN.1 clause": {asn1, true},
+		"IE clause":    {ieClause, false},
+		"message":      {msgClause, false},
+	} {
+		if got := holdsAnswer("", c.content, r); got != c.want {
+			t.Errorf("%s: holdsAnswer = %v, want %v", name, got, c.want)
+		}
+	}
+
+	// A list gold needs every member, and the table markup between them must not
+	// hide one.
+	list, _ := json.Marshal([]string{"Message Type", "MBS Session ID"})
+	rl := Record{ID: "ngap-mandatory-9.2.17.10", Type: "ngapies", Gold: list}
+	table := "<table><tbody><tr><td><p>Message&nbsp;Type</p></td><td><p>M</p></td></tr>" +
+		"<tr><td><p>MBS Session ID</p></td><td><p>M</p></td></tr></tbody></table>"
+	if !holdsAnswer("", table, rl) {
+		t.Error("the message clause states both IEs")
+	}
+	if holdsAnswer("", "<p>MBS Session ID</p>", rl) {
+		t.Error("a clause naming one of the two does not hold the answer")
+	}
+}
+
 func TestVerdictOK(t *testing.T) {
 	for v, want := range map[Verdict]bool{
 		Exact: true, Ancestor: true, Contains: true, NotFound: false, Wrong: false,

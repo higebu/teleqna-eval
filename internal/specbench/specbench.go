@@ -39,16 +39,27 @@ type Task struct {
 	Probe *Probe `json:"probe,omitempty"`
 }
 
-// Probe records what an OpenAPI task was built from: which schema, which
-// property of which owner, or which operation.
+// Probe records what a task was built from: for an OpenAPI task which schema,
+// which property of which owner, or which operation; for an NGAP/S1AP task the
+// clauses its answer was walked through.
 type Probe struct {
-	Kind     string `json:"kind"` // request, object, allof, oneof
-	Schema   string `json:"schema"`
+	Kind     string `json:"kind"` // request, object, allof, oneof, ngap-*
+	Schema   string `json:"schema,omitempty"`
 	Owner    string `json:"owner,omitempty"`
 	Property string `json:"property,omitempty"`
 	Path     string `json:"path,omitempty"`
 	Method   string `json:"method,omitempty"`
 	Key      string `json:"key,omitempty"`
+	// The NGAP/S1AP walk: the message clause the question names, the clause
+	// that specifies the IE, and the ASN.1 clause the gold was read from.
+	Message string `json:"message,omitempty"`
+	IE      string `json:"ie,omitempty"`
+	ASN1    string `json:"asn1,omitempty"`
+	// TypeName is the ASN.1 assignment the IE maps to. ASN1Only records whether
+	// the IE's own clause states the answer as well — the generator measures
+	// that rather than asserting the walk had to be taken.
+	TypeName string `json:"type_name,omitempty"`
+	ASN1Only bool   `json:"asn1_only,omitempty"`
 }
 
 // GoldList returns a list-shaped gold: ASN.1 fields in definition order, or the

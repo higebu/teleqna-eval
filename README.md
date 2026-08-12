@@ -298,6 +298,18 @@ It is not the `-fixedk` baseline in another form: fixed-k issues one query the
 harness wrote, one round lets the model write its own and call several tools in
 it.
 
+The `ngapies` and `ngapasn1` types are built to be read together under that
+condition. Both come from NGAP (`TS 38.413`) and S1AP (`TS 36.413`), whose shape
+is why: a message is a table of information elements, each IE is its own clause,
+and the ASN.1 for every IE of the protocol sits in one clause of 90–270 KB
+against a 16 KB `-tool-result-max`. `ngapies` asks which IEs of a named message
+are mandatory — one clause holds it, but as a table of rows at several nesting
+depths. `ngapasn1` names a message and an IE and asks for a constraint the ASN.1
+clause states, in the notation that clause uses: the IE clause writes
+`INTEGER (0..2^40 -1)` where the ASN.1 writes `1099511627775`, so the gold
+decides which walk counts. Each task records whether its IE clause states the
+answer too (`stratum`), because that is measured rather than assumed.
+
 Its cost is in how the corpus is asked for a row, not in any Go function, so
 the benchmarks run against a real database and skip without one:
 

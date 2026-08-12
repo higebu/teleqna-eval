@@ -3,6 +3,7 @@ package specbench
 import (
 	"encoding/json"
 	"fmt"
+	"html"
 	"regexp"
 	"strings"
 )
@@ -301,11 +302,56 @@ func holdsAnswer(title, content string, r Record) bool {
 		// the semantics — so a clause titled after the element is the citation
 		// an implementer wants, whether or not it repeats the number.
 		return name != "" && strings.Contains(normName(title), normName(name))
+	case "ngapies", "ngapasn1":
+		// The walk these tasks describe passes through clauses that do not hold
+		// the answer — a message clause names an IE and points at another
+		// clause for its ASN.1 — so naming one of them is not a citation. The
+		// rule is the same as everywhere else here: the clause has to state the
+		// value. Which of the two notations a clause writes it in is exactly
+		// what separates the IE clause from the ASN.1 one, and the question
+		// asked for one of them.
+		flat := flatten(content)
+		for _, g := range goldValues(r) {
+			if !strings.Contains(flat, flatten(g)) {
+				return false
+			}
+		}
+		return true
 	}
 	return strings.Contains(normLatex(content), normLatex(r.GoldString()))
 }
 
 var quotedRe = regexp.MustCompile(`'([^']+)'`)
+
+// flatten reduces a clause, or one gold value, to the text they can be compared
+// on: the HTML the DOCX conversion leaves around every table cell removed, the
+// entities it writes resolved, and the non-breaking spaces those entities
+// become treated as the spaces they are printed as.
+func flatten(s string) string {
+	s = html.UnescapeString(tagRe.ReplaceAllString(s, " "))
+	s = strings.Map(func(r rune) rune {
+		switch r {
+		case '\u00a0', '\u202f': // the non-breaking spaces &nbsp; resolves to
+			return ' '
+		case '\u2011': // and the non-breaking hyphen, which prints as one
+			return '-'
+		}
+		return r
+	}, s)
+	return strings.ToLower(spaceRe.ReplaceAllString(strings.TrimSpace(s), " "))
+}
+
+// goldValues reads a gold of either shape as the list of values a citing clause
+// has to state.
+func goldValues(r Record) []string {
+	if list := r.GoldList(); len(list) > 0 {
+		return list
+	}
+	if s := r.GoldString(); s != "" {
+		return []string{s}
+	}
+	return nil
+}
 
 // elementName is the protocol element a code task is about, however the task
 // asks for it.

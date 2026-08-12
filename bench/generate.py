@@ -15,14 +15,22 @@ of the kind TeleQnA carries — the gold is the document.
 
     python3 bench/generate.py --db 3gpp-latest.db --out bench/ --n 30
 
-Two task types:
+The task types:
 
-  asn1     given an ASN.1 type name, name its fields.       gold = field names
-  formula  given the sentence that introduces an equation,   gold = LaTeX
-           reproduce the equation.
+  asn1      given an ASN.1 type name, name its fields.      gold = field names
+  formula   given the sentence that introduces an equation,  gold = LaTeX
+            reproduce the equation.
+  gtpv2c    a wire code or the element that carries it, in   gold = code or name
+  pfcp      either direction, from a protocol's registry.
+  diameter
+  ngapies   which IEs of a named NGAP/S1AP message are       gold = IE names
+            mandatory.
+  ngapasn1  a constraint the ASN.1 of NGAP/S1AP puts on an   gold = a bound,
+            IE the question names through a message.         a size or a value set
+  openapi-* the 5G SBI schemas, in openapi_tasks.py.
 
-Both also require the answer to say which specification and section it came
-from, which is scored separately: being right for the wrong reason is not
+Every type also requires the answer to say which specification and section it
+came from, which is scored separately: being right for the wrong reason is not
 useful when the point is to check a specification.
 """
 
@@ -306,6 +314,290 @@ def code_tasks(conn, n, rng, key=None):
     return cands[:n]
 
 
+# The radio-access application protocols. Their shape is the reason these tasks
+# exist: a message is a table of information elements, each IE is its own
+# clause, and the ASN.1 for every IE of the protocol sits in *one* clause of a
+# few hundred kilobytes. So the document that holds an answer is not the
+# document the question names, and the clause that holds it is far too large to
+# read whole — 270 KB against the 16 KB a tool result is truncated to.
+#
+# That is the opposite of the `asn1` type, which is generated from RRC: TS 38.331
+# gives each type its own small clause, so one retrieval holds the answer.
+AP_PROTOCOLS = [
+    dict(key="ngap", protocol="NGAP", spec="TS 38.413",
+         messages="9.2.", ies="9.3.", asn1="9.4.5"),
+    dict(key="s1ap", protocol="S1AP", spec="TS 36.413",
+         messages="9.1.", ies="9.2.", asn1="9.3.4"),
+]
+
+# The head of an ASN.1 assignment at column 0. The body runs to the next one:
+# stopping at the first line that starts at column 0 would cut an ENUMERATED
+# off at its closing brace, which is where its values are.
+AP_ASSIGN = re.compile(r"^([A-Za-z][\w-]*)\s*::=", re.M)
+AP_INT = re.compile(r"^INTEGER\s*\(\s*(-?\d+)\s*\.\.\s*(\d+)")
+AP_SIZE = re.compile(r"^(BIT STRING|OCTET STRING)\s*\(\s*SIZE\s*\(\s*(\d+)\s*\)\s*\)")
+AP_ENUM = re.compile(r"^ENUMERATED\s*\{(.*?)\}", re.S)
+AP_ENUM_VALUE = re.compile(r"[a-zA-Z][\w-]*")
+AP_CLAUSE_REF = re.compile(r"\b\d+(?:\.\d+)+\b")
+# The IE table every message clause and every IE clause opens with.
+AP_TABLE_HEAD = "IE/Group Name"
+
+
+def _ap_key(s):
+    """A name reduced to what the two notations agree on: the IE clause titles
+    it "AMF UE NGAP ID" and the ASN.1 calls it "AMF-UE-NGAP-ID"."""
+    return re.sub(r"[^a-z0-9]", "", s.lower())
+
+
+def _ap_assignments(text):
+    """{name: [body, ...]} for one ASN.1 clause. A name defined twice keeps both,
+    so the generator can drop it rather than pick one."""
+    out, heads = {}, list(AP_ASSIGN.finditer(text))
+    for i, m in enumerate(heads):
+        end = heads[i + 1].start() if i + 1 < len(heads) else len(text)
+        out.setdefault(m.group(1), []).append(text[m.end():end].strip())
+    return out
+
+
+def _ap_ie_tables(conn, entry, prefix):
+    """Clauses under `prefix` that open with an IE table, as
+    {number: (title, content, rows)}."""
+    out = {}
+    for num, title, content in conn.execute(
+        "SELECT number,title,content FROM sections WHERE spec_id=? AND number LIKE ? "
+        "ORDER BY number", (entry["spec"], prefix + "%")
+    ):
+        rows = html_rows(content)
+        if rows and rows[0][:1] == [AP_TABLE_HEAD]:
+            out[num] = (title, content, rows)
+    return out
+
+
+def _ap_row_name(cells):
+    """The IE/Group Name of a table row, and whether it is a top-level row.
+
+    Nesting is written with leading '>' characters, one per level, so a row's
+    depth is in its name rather than in the markup.
+    """
+    name = re.sub(r"\s+", " ", cells[0]).strip()
+    return name.lstrip("> ").strip(), not name.startswith(">")
+
+
+def _ap_corpus(conn, entry):
+    """Everything one protocol's tasks are derived from, read once."""
+    messages = _ap_ie_tables(conn, entry, entry["messages"])
+    ies = _ap_ie_tables(conn, entry, entry["ies"])
+    row = conn.execute("SELECT version,title,content FROM sections WHERE spec_id=? AND number=?",
+                       (entry["spec"], entry["asn1"])).fetchone()
+    if row is None:
+        raise SystemExit(f"{entry['spec']}: no clause {entry['asn1']} in this database")
+    version, asn1_title, asn1 = row[0], row[1], _ap_assignments(row[2])
+    # A message a model could not name unambiguously, or an IE title that two
+    # clauses share, has more than one right answer. Drop both sides.
+    msg_titles = collections.Counter(t for t, _, _ in messages.values())
+    ie_titles = collections.Counter(_ap_key(t) for t, _, _ in ies.values())
+    ie_by_title = {_ap_key(t): num for num, (t, _, _) in ies.items()
+                   if ie_titles[_ap_key(t)] == 1}
+    return dict(entry, messages=messages, ies=ies, asn1=asn1, version=version,
+                asn1_title=asn1_title, msg_titles=msg_titles, ie_by_title=ie_by_title)
+
+
+def _ap_mandatory(rows):
+    """The top-level IEs a message table marks Presence 'M', in table order."""
+    out = []
+    for cells in rows[1:]:
+        name, top = _ap_row_name(cells)
+        if not top or len(cells) < 2 or cells[1].strip() != "M" or not name:
+            continue
+        out.append(name)
+    return out
+
+
+def ap_mandatory_tasks(conn, n, rng):
+    """Which IEs of a named message are mandatory.
+
+    One clause holds the answer, but it holds it as a table of up to 40 rows at
+    several nesting depths, and what is asked for is the subset satisfying a
+    predicate. Nothing here has to be composed across documents — which is the
+    point of running it beside the ASN.1 type below: the two are designed to
+    need a different number of hops, and the one-call condition is what says
+    whether they got them.
+    """
+    cands, answered = [], set()
+    for entry in AP_PROTOCOLS:
+        c = _ap_corpus(conn, entry)
+        for num, (title, content, rows) in sorted(c["messages"].items()):
+            if c["msg_titles"][title] > 1:
+                continue
+            mandatory = _ap_mandatory(rows)
+            # One mandatory IE is a lookup, and a table of forty is a
+            # transcription exercise rather than a question.
+            if not 2 <= len(mandatory) <= 10:
+                continue
+            if len(set(_ap_key(m) for m in mandatory)) != len(mandatory):
+                continue
+            # Most NGAP messages are mandatory in exactly the same three IEs, so
+            # a pool drawn straight from the clause list asks one question
+            # eighteen times and rewards a model that answers from the pattern
+            # without opening anything. One task per distinct answer.
+            key = (entry["key"], tuple(_ap_key(m) for m in mandatory))
+            if key in answered:
+                continue
+            answered.add(key)
+            cands.append({
+                "id": f"{entry['key']}-mandatory-{num}",
+                "type": "ngapies",
+                "answer_kind": "set",
+                "question": (
+                    f"The {entry['protocol']} {title} message is specified as a table of "
+                    f"information elements. List the IEs that table marks as mandatory — "
+                    f"Presence \"M\" — counting only the rows at the top level of the "
+                    f"table and not the members of any nested group or list. Give each "
+                    f"one as the IE/Group Name column writes it."
+                ),
+                "gold": mandatory,
+                "spec_id": entry["spec"],
+                "version": c["version"],
+                "section": num,
+                "section_title": title,
+                "probe": {"kind": "ngap-mandatory", "message": num},
+            })
+    rng.shuffle(cands)
+    return cands[:n]
+
+
+def _ap_asn1_shape(body):
+    """What one ASN.1 assignment states, when it states something a question can
+    have a single answer to: an upper bound, a fixed size, or a value set."""
+    head = body.splitlines()[0].strip() if body else ""
+    if (m := AP_INT.match(head)):
+        return "int", m.group(2), None
+    if (m := AP_SIZE.match(head)):
+        return "size", m.group(2), m.group(1)
+    if (m := AP_ENUM.match(body)):
+        values = [v for v in (s.strip() for s in re.split(r"[,\n]", m.group(1)))
+                  if AP_ENUM_VALUE.fullmatch(v)]
+        # A single-valued ENUMERATED carries no information to ask for, and the
+        # extension marker is not one of the values.
+        if len(values) >= 2:
+            return "enum", values, None
+    return None, None, None
+
+
+def ap_asn1_tasks(conn, n, rng):
+    """An ASN.1 constraint on an IE, asked through a message that carries it.
+
+    The question names a message and an IE by the words the message table uses;
+    the answer is in the protocol's ASN.1 clause, under a name the question does
+    not contain, in a notation the IE clause does not always use — the IE clause
+    writes `INTEGER (0..2^40 -1)` where the ASN.1 writes `1099511627775`. The
+    gold is the ASN.1 one, so the question asks for a decimal and reaching it
+    means reaching that clause.
+    """
+    cands = []
+    for entry in AP_PROTOCOLS:
+        c = _ap_corpus(conn, entry)
+        seen = set()
+        for num, (title, content, rows) in sorted(c["messages"].items()):
+            if c["msg_titles"][title] > 1:
+                continue
+            names = collections.Counter(_ap_row_name(cells)[0] for cells in rows[1:])
+            for cells in rows[1:]:
+                name, _ = _ap_row_name(cells)
+                if not name or names[name] > 1 or _ap_key(name) in seen:
+                    continue
+                ref = cells[3] if len(cells) > 3 else ""
+                m = AP_CLAUSE_REF.search(ref)
+                if not m or m.group(0) not in c["ies"]:
+                    continue
+                ie_num = m.group(0)
+                ie_title = c["ies"][ie_num][0]
+                # The row has to name the IE the way its own clause titles it.
+                # Where a message renames an IE, following the reference is a
+                # step the question cannot state, and the task would be asking
+                # about something it did not name.
+                if _ap_key(ie_title) != _ap_key(name):
+                    continue
+                if c["ie_by_title"].get(_ap_key(ie_title)) != ie_num:
+                    continue
+                bodies = c["asn1"].get(_ap_typename(c, ie_title), [])
+                if len(bodies) != 1:
+                    continue
+                kind, value, unit = _ap_asn1_shape(bodies[0])
+                if not kind:
+                    continue
+                seen.add(_ap_key(name))
+                cands.append(_ap_asn1_task(conn, entry, c, num, title, name,
+                                           ie_num, kind, value, unit))
+    rng.shuffle(cands)
+    return cands[:n]
+
+
+def _ap_typename(c, ie_title):
+    """The ASN.1 assignment an IE clause title maps to, if exactly one does."""
+    hits = [k for k in c["asn1"] if _ap_key(k) == _ap_key(ie_title)]
+    return hits[0] if len(hits) == 1 else None
+
+
+def _ap_asn1_task(conn, entry, c, msg_num, msg_title, ie_name, ie_num, kind, value, unit):
+    proto = entry["protocol"]
+    stem = (f"The {proto} {msg_title} message carries an information element named "
+            f"\"{ie_name}\".")
+    if kind == "int":
+        question = (f"{stem} In the ASN.1 with which {proto} defines that IE, what is the "
+                    f"largest value it may take? Answer with a decimal integer.")
+        gold, answer_kind = value, "scalar"
+    elif kind == "size":
+        held = "bits" if unit == "BIT STRING" else "octets"
+        question = (f"{stem} In the ASN.1 with which {proto} defines that IE, it is a "
+                    f"{unit} of a fixed size. How many {held} is it? Answer with a "
+                    f"decimal integer.")
+        gold, answer_kind = value, "scalar"
+    else:
+        question = (f"{stem} In the ASN.1 with which {proto} defines that IE, it is an "
+                    f"ENUMERATED. List its values, spelled as the ASN.1 spells them, "
+                    f"leaving out the extension marker.")
+        gold, answer_kind = value, "set"
+    # Whether the IE's own clause already states the answer decides how far the
+    # walk really has to go, and it is recorded rather than filtered on: a task
+    # is not made multi-hop by asserting that it is.
+    plain = re.sub(r"<[^>]+>", " ", c["ies"][ie_num][1])
+    wanted = gold if isinstance(gold, list) else [gold]
+    asn1_only = not all(re.search(r"\b" + re.escape(w) + r"\b", plain) for w in wanted)
+    return {
+        "id": f"{entry['key']}-asn1-{_ap_key(ie_name)}",
+        "type": "ngapasn1",
+        "answer_kind": answer_kind,
+        "question": question,
+        "gold": gold,
+        "spec_id": entry["spec"],
+        "version": c["version"],
+        # The ASN.1 clause is where the value asked for is written, so it is the
+        # citation the task was generated from. The IE clause counts too when it
+        # states the same value, which the grader decides against the document.
+        "section": entry["asn1"],
+        "section_title": c["asn1_title"],
+        "stratum": "asn1-only" if asn1_only else "ie-clause-too",
+        "probe": {"kind": f"ngap-{kind}", "message": msg_num, "ie": ie_num,
+                  "asn1": entry["asn1"], "type_name": _ap_typename(c, c["ies"][ie_num][0]),
+                  "asn1_only": asn1_only},
+    }
+
+
+def ap_rederive(conn, task):
+    """Re-derive an NGAP/S1AP gold from the database, for --verify."""
+    entry = next(e for e in AP_PROTOCOLS if e["spec"] == task["spec_id"])
+    c = _ap_corpus(conn, entry)
+    probe = task["probe"]
+    if probe["kind"] == "ngap-mandatory":
+        msg = c["messages"].get(probe["message"])
+        return _ap_mandatory(msg[2]) if msg else None
+    bodies = c["asn1"].get(probe["type_name"], [])
+    if len(bodies) != 1:
+        return None
+    return _ap_asn1_shape(bodies[0])[1]
+
+
 _OPENAPI_STORE = None
 
 
@@ -341,6 +633,10 @@ def verify(conn, tasks):
         elif kind == "openapi":
             store = _openapi_store(conn)
             got = openapi_tasks.rederive(store, t)
+            if got != gold:
+                bad.append((t["id"], gold, got))
+        elif kind in ("ngapies", "ngapasn1"):
+            got = ap_rederive(conn, t)
             if got != gold:
                 bad.append((t["id"], gold, got))
         else:
@@ -383,7 +679,8 @@ def main():
 
     conn = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
     os.makedirs(args.out, exist_ok=True)
-    generators = [("asn1", asn1_tasks), ("formula", formula_tasks)]
+    generators = [("asn1", asn1_tasks), ("formula", formula_tasks),
+                  ("ngapies", ap_mandatory_tasks), ("ngapasn1", ap_asn1_tasks)]
     for name, fn in openapi_tasks.GENERATORS.items():
         generators.append((name, lambda c, n, r, f=fn: f(_openapi_store(c), n, r)))
     # One file per protocol: a single "code" pool would be swamped by the
