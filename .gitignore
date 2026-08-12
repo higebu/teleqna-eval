@@ -5,3 +5,6 @@
 # Benchmark questions and their gold answers are never published: a model
 # trained on them would score on memory rather than retrieval.
 /bench/tasks-*.json
+
+# Python leaves these beside the generators; they are build output.
+__pycache__/
