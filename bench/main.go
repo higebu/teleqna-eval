@@ -16,7 +16,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -98,6 +100,11 @@ func main() {
 
 	var mcp *mcpclient.Client
 	var tools []llm.ToolDef
+	// The names of the bridged tools, recorded in every record's meta. Which
+	// tools were attached is part of what an answer means — two runs against
+	// the same endpoint are not the same condition if the server gained a tool
+	// in between — and the filename can only claim it.
+	var toolNames []string
 	if *mcpURL != "" {
 		mcp = mcpclient.New(*mcpURL, 120*time.Second)
 		mt, err := mcp.ListTools()
@@ -106,8 +113,10 @@ func main() {
 		}
 		for _, t := range mt {
 			tools = append(tools, llm.ToolDef{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema})
+			toolNames = append(toolNames, t.Name)
 		}
-		log.Printf("bridged %d MCP tools from %s", len(tools), *mcpURL)
+		sort.Strings(toolNames)
+		log.Printf("bridged %d MCP tools from %s: %s", len(tools), *mcpURL, strings.Join(toolNames, " "))
 	}
 
 	be, _, err := llm.New(llm.Config{
@@ -176,6 +185,7 @@ func main() {
 		"tasks": *tasksPath, "started_at": time.Now().UTC().Format(time.RFC3339),
 		"prompt_sha256": sha(systemPrompt), "retrieval": retrievalMode,
 		"fixed_k": strconv.Itoa(*fixedK), "context_file": *ctxFile,
+		"mcp_tools": strings.Join(toolNames, ","),
 	}
 	enc := json.NewEncoder(f)
 	var (
