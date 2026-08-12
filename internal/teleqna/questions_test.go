@@ -136,3 +136,24 @@ func TestFormat(t *testing.T) {
 		t.Errorf("Format() = %q, want %q", got, want)
 	}
 }
+
+func TestParseRelease(t *testing.T) {
+	tests := map[string]int{
+		"What is the AMF? [3GPP Release 18]": 18,
+		"Something [3GPP Release 14]":        14,
+		"No tag here":                        0,
+		"[Release 18]":                       0,
+	}
+	for text, want := range tests {
+		if got := ParseRelease(text); got != want {
+			t.Errorf("ParseRelease(%q) = %d, want %d", text, got, want)
+		}
+	}
+}
+
+func TestGoldAnswer(t *testing.T) {
+	q := Question{Answer: 2, Options: map[int]string{1: "a", 2: "b"}}
+	if got := GoldAnswer(q); got != "option 2: b" {
+		t.Errorf("got %q", got)
+	}
+}

@@ -12,49 +12,19 @@ the two runs is the effect of 3gpp-mcp.
 
 ## Results
 
-All 1,509 `Standards specifications` TeleQnA questions tagged `3GPP`, same
-question set for every run, each model on its vendor's own API, evaluated
-2026-08-09:
+Results are not kept here. The harness produces them; they are reported in
+[3gpp-mcp/BENCHMARK.md](https://github.com/higebu/3gpp-mcp/blob/main/BENCHMARK.md),
+pinned to a database and a protocol. Duplicating that table into this file is
+what left the previous one stale for a month.
 
-| Model | No tools | With 3gpp-mcp | Δ | Win/loss pairs¹ | McNemar |
-|---|---|---|---|---|---|
-| DeepSeek V4 Flash | 75.3% (1137/1509) | **86.5%** (1305/1509) | +11.1pt | 225 / 57 | χ²=98.9, p<10⁻²² |
-| Claude Sonnet 5 | 73.5% (1109/1509) | **84.5%** (1275/1509) | +11.0pt | 241 / 75 | χ²=86.2, p<10⁻¹⁹ |
-| GPT 5.6 Luna | 73.6% (1110/1509) | **85.0%** (1282/1509) | **+11.4pt** | 242 / 70 | χ²=93.7, p<10⁻²¹ |
-
-¹ questions only the tools run answered correctly / only the baseline answered correctly.
-
-Observations:
-
-- The effect reproduces across three unrelated model families, each on its
-  own vendor's API, so it is a property of the tool access, not of one model
-  or one serving stack. The three deltas land within 0.4pt of each other.
-- 68 of the 1,509 questions were answered correctly by all three models with
-  tools and by none of them without tools — questions that effectively
-  require reading the specification. Their TeleQnA IDs (`question N`):
-  405, 558, 669, 813, 955, 1099, 1134, 1185, 1241, 1274, 1411, 1545, 1810,
-  1875, 1918, 1988, 2488, 2608, 2767, 2771, 2898, 2962, 3066, 3189, 3391,
-  3553, 3673, 3783, 4001, 4184, 4242, 4254, 4293, 4401, 4451, 4525, 4688,
-  4737, 4803, 5581, 5984, 6023, 6151, 6393, 6698, 6706, 6956, 7194, 7288,
-  7453, 7657, 7810, 7956, 7980, 8082, 8138, 8210, 8638, 8694, 8948, 9050,
-  9394, 9674, 9728, 9738, 9797, 9886, 9949.
-- Tool-call efficiency differs sharply: Claude Sonnet 5 averaged 3.3
-  calls/question, GPT 5.6 Luna 5.7, DeepSeek V4 Flash 10.1 — Sonnet reaches
-  the same gain with a third of the searches.
-- Questions that still hit the 20-round tool budget: DeepSeek 61, Sonnet 47,
-  Luna 7.
-
-### Usage per run (tools / baseline)
-
-| Run | Prompt tokens | Completion tokens | Tool calls |
-|---|---|---|---|
-| DeepSeek V4 Flash | 164.7M / 0.33M | 5.97M / 4.83M | 15,222 |
-| Claude Sonnet 5 | 76.6M / 0.33M | 1.22M / 0.14M | 4,967 |
-| GPT 5.6 Luna | 67.0M / 0.22M | 0.83M / 0.52M | 8,652 |
-
-Wall-clock per pair was 25–60 minutes at 8–32 concurrent questions; a
-single-instance 3gpp-mcp server absorbed 32 parallel tool streams without
-errors.
+**Per-question outputs are not published, and neither are the generated
+benchmark tasks.** A results file carries the question text, the options and
+the gold answer of every item it scored; publishing one puts the benchmark
+into the next crawl and into the next model's training data, after which no
+number measured on it means anything. TeleQnA is distributed as a
+password-protected archive for that reason, and the tasks generated from the
+specifications are withheld for the same one. What is published is the
+aggregate, the protocol, and the code that reproduces both.
 
 ## Method
 
@@ -63,25 +33,25 @@ errors.
   IEEE 802.11 etc., which a 3GPP tool cannot help with): 1,509 questions.
 - **Tools condition**: the 11 MCP tools of a 3gpp-mcp server (database:
   latest version of every spec) are bridged into the model API as function
-  tools; the model may call up to 20 rounds of tools per question, then is
-  asked to answer. Every model runs on its vendor's own API: GPT 5.6 Luna on
-  OpenAI's Responses API (`-api responses`, default reasoning effort),
-  Claude Sonnet 5 on Anthropic's OpenAI-compatible chat completions
-  endpoint, DeepSeek V4 Flash on `api.deepseek.com`.
-- **Baseline condition**: same prompt, no tools.
-- **Answering**: `ANSWER: <option number>` extracted with strict-to-loose
-  fallbacks; up to 2 re-prompts if no answer is parseable. A small number of
-  questions that errored mid-run were retried with `-ids`; final tallies
-  contain an answer for every question.
-- **Generation**: no token limit and no temperature, matching the TeleQnA
-  paper's own settings; every pair uses identical settings on both conditions,
-  one run per condition. (Telco-RAG uses `max_tokens=4000`; GSMA evals sets
-  `temperature=0`.) An earlier pass with `max_tokens=8192` and an 8-round
-  budget measured +12.4/+10.9/+9.3pt; the cap suppressed only DeepSeek's
-  baseline (165 of its 1,509 baseline generations hit it, against 1 for Sonnet
-  and 0 for Luna).
-- **Scoring**: exact match of the option number; an unanswered question
-  counts as wrong. Significance via McNemar's test on paired outcomes.
+  tools; the model may call tools until the round budget runs out, then is
+  asked to answer. The reported runs pass `-max-rounds 20`; the flag's default
+  is 8.
+- **Baseline condition**: the same prompt with no tools attached — exactly
+  the same, see [Protocol](#protocol).
+- **Answering**: the answer is extracted with strict-to-loose fallbacks and up
+  to 2 re-prompts, identically in both conditions. Every record carries the
+  `parse_tier` that produced it, so a fallback parse can be re-scored as a
+  failure.
+- **Generation**: no token limit (`-max-tokens 0`; the flag's default is 8192),
+  and every pair uses identical settings on both conditions. Sampling
+  temperature is whatever the pair sends: the reported DeepSeek runs send
+  `-temperature 0`, and the other two models reject a non-default sampling
+  parameter, so their requests carry none.
+- **Scoring**: exact match of the option number; an unanswered question counts
+  as wrong. `strict_match` additionally records whether the answer string
+  equals TeleQnA's own `option N: text`, which is how the upstream harness
+  scores. Significance via McNemar's test with continuity correction on paired
+  outcomes.
 
 Caveats:
 
@@ -93,14 +63,62 @@ Caveats:
   while the server database held the latest version of every spec; a
   release-pinned database (`3gpp-mcp build --release 17 ...`) would remove a
   potential source of answer drift. The observed gains occur despite it.
-- Per-question outputs are not published: TeleQnA is deliberately
-  distributed as a password-protected archive to keep it out of crawled
-  training corpora, and raw run logs embed question content.
-- Each figure comes from a single run per condition, and re-running an
-  unchanged condition moves it by up to about a point (Luna's baseline moved
-  75.0% → 73.6% across two identical runs, with 151 individual questions
-  flipping). The ~11pt effect is far larger than that, but do not read the
-  differences *between* models as meaningful.
+- Re-running an unchanged condition moves it by up to about a point, and
+  individual questions flip in the hundreds while the total barely moves. The
+  paired conditions are measured three times each for that reason; a single
+  pass, such as the fixed-k baseline, carries that much noise on its own.
+
+## Protocol
+
+**One prompt per pair.** Both conditions send the identical system and user
+message; the only difference is whether tool definitions are attached to the
+request. `internal/prompt` owns the wording and nothing in the harness may
+branch on tool availability — `TestPromptIdenticalAcrossConditions` fails the
+build if that ever changes. This is the rule the published runs broke: their
+baseline was told to give *brief* reasoning while the tools condition was not,
+and on Claude Sonnet 5 the baseline answered in a median of 10 completion
+tokens, so its deficit is partly a missing chain of thought rather than missing
+retrieval.
+
+**Prompt variants** (`-prompt`):
+
+| ID | Wording | Answer format |
+|---|---|---|
+| `teleqna` (default) | the system prompt of TeleQnA's own `evaluation_tools.py`, byte for byte | JSON, `"answer": "option N: text"` |
+| `search` | the same text plus one sentence asking the model not to answer from memory | same |
+
+A variant is appended to the shared prompt and sent to *both* conditions of a
+pair, so it never becomes a difference between them. `search` exists because a
+model that declines to call a tool measures itself rather than the server; the
+sentence names no source and no search terms, so it can only remove the
+model's discretion over whether to look.
+
+`teleqna` sends the bytes upstream sends: `TestFormatMatchesUpstreamBytes`
+compares the rendered user message against a golden file generated by
+evaluation_tools.py's own logic, and `TestTeleQnASystemIsUpstreamText` pins the
+system prompt. It deviates from upstream in two documented ways: one question
+per request (upstream batches five into one JSON object, which cannot host a
+tool-calling loop), and up to two re-prompts when the reply does not parse
+(upstream retries the whole batch up to five times). Both apply equally to
+both conditions.
+
+**Retrieval conditions**: no tools (`-mcp ''`), the model's own tool loop
+(default), or the non-agentic baseline `-fixedk N` — one BM25 search over the
+same database, the text of the top N sections prepended, no tools attached.
+3gpp-mcp ranks FTS5 hits with a weighted bm25, so `-fixedk` is a fixed-k RAG
+baseline over exactly the corpus the agentic condition searches.
+
+**Provenance.** Every run writes `<out>.meta.json` (harness commit, every flag,
+prompt id and sha256, model, temperature, MCP server identity and tool list,
+`-db-manifest`) and, unless disabled, `<out>.trace.jsonl` with every message and
+every tool result as the model saw it. Each record carries `run_id`, `attempt`,
+`repeat_idx`, `parse_tier` and `answer_raw`. Traces are large — hundreds of
+megabytes for a full-pool tools run — and are not meant to be committed.
+
+**Repeats and resume.** `-repeat N` measures the same condition N times;
+`-resume` appends to an existing file, re-running only what is missing or
+errored and recording a higher `attempt` on those records, so a spliced file
+says so in its own data.
 
 ## Setup
 
@@ -164,6 +182,28 @@ Results are written as JSONL under `results/` (one record per question:
 prediction, expectation, tool-call trace, token usage, duration) plus a
 summary line on stdout.
 
+## The specification-grounded benchmark
+
+`bench/` generates questions from a pinned specification database and scores
+the answer *and* the clause it is attributed to.
+
+```bash
+python3 bench/generate.py --db 3gpp-latest.db --verify   # tasks-*.json
+go run ./bench -tasks bench/tasks-asn1.json -model ... -out results/asn1.jsonl
+go run ./bench/grade -db 3gpp-latest.db -tasks-dir bench results/asn1.jsonl
+```
+
+**Running and grading are separate passes, and grading never writes over its
+input.** The run records what the model answered and whether the answer is
+right, which needs nothing but the reply. Whether a citation is right needs the
+corpus — a clause that contains the gold one is a coarser citation rather than
+a wrong one, and a clause that does not exist is a different failure from one
+that does — so `bench/grade` decides it afterwards, writes a `.graded.jsonl`
+beside the input, and stamps each record with the revision that graded it.
+
+The grader reads the database directly rather than through the MCP server: the
+tool under test must not be the one deciding whether its own citation exists.
+
 ## Flags
 
 | Flag | Default | Description |
@@ -183,8 +223,16 @@ summary line on stdout.
 | `-max-rounds` | 8 | Tool-calling rounds per question before forcing an answer |
 | `-max-tokens` | 8192 | Token cap per completion (0 = provider default, or the model's ceiling on `-api anthropic`) |
 | `-max-tokens-field` | `max_tokens` | Request field name for the cap (e.g. `max_completion_tokens`) |
+| `-temperature` | (unset) | Sampling temperature; empty sends no temperature field at all. Some reasoning models reject it |
 | `-http-timeout` | 300 | Per-request timeout in seconds; raise it when running without a token cap |
 | `-tool-result-max` | 16000 | Max bytes of a tool result passed to the model |
+| `-prompt` | `teleqna` | Prompt variant: `teleqna`, `cot` or `ansline` |
+| `-fixedk` | 0 | Non-agentic baseline: one search, top-k sections prepended, no tools |
+| `-repeat` | 1 | Run every question this many times |
+| `-resume` | false | Append to an existing `-out` file, re-running only missing or errored questions |
+| `-run-id` | timestamp | Identifier recorded on every record |
+| `-db-manifest` | (none) | Identifier of the pinned database the MCP server serves, recorded in the metadata |
+| `-trace` | auto | Full message/tool-result trace path; `''` disables |
 | `-out` | auto | JSONL output path |
 
 ## License

@@ -1,0 +1,31 @@
+[
+  {
+    "id": "question 0",
+    "fields": {
+      "question": "What is the purpose of the Nmfaf_3daDataManagement_Deconfigure service operation? [3GPP Release 18]",
+      "option 1": "To configure the MFAF to map data or analytics received by the MFAF to out-bound notification endpoints",
+      "option 2": "To configure the MFAF to stop mapping data or analytics received by the MFAF to out-bound notification endpoints",
+      "option 3": "To supply data or analytics from the MFAF to notification endpoints",
+      "option 4": "To fetch data or analytics from the MFAF based on fetch instructions",
+      "answer": "option 2: To configure the MFAF to stop mapping data or analytics received by the MFAF to out-bound notification endpoints",
+      "explanation": "The Nmfaf_3daDataManagement_Deconfigure service operation is used to stop mapping data or analytics received by the MFAF to one or more out-bound notification endpoints.",
+      "category": "Standards specifications"
+    },
+    "want": "Here are the questions: \n {\"question 0\": {\"question\": \"What is the purpose of the Nmfaf_3daDataManagement_Deconfigure service operation? [3GPP Release 18]\", \"option 1\": \"To configure the MFAF to map data or analytics received by the MFAF to out-bound notification endpoints\", \"option 2\": \"To configure the MFAF to stop mapping data or analytics received by the MFAF to out-bound notification endpoints\", \"option 3\": \"To supply data or analytics from the MFAF to notification endpoints\", \"option 4\": \"To fetch data or analytics from the MFAF based on fetch instructions\", \"category\": \"Standards specifications\"}}"
+  },
+  {
+    "id": "question 29",
+    "fields": {
+      "question": "When can there be two N3 tunnel terminations at the RAN for a PDU Session? [3GPP Release 18]",
+      "option 1": "When there are multiple PDU Session Ids for the PDU Session",
+      "option 2": "When the QoS Flows of the PDU Session are split across the two RATs",
+      "option 3": "When the PDU Session belongs to a specific Network Slice",
+      "option 4": "When the Master RAN node is congested",
+      "option 5": "When the Secondary RAN node is congested",
+      "answer": "option 2: When the QoS Flows of the PDU Session are split across the two RATs",
+      "explanation": "If the DL User Plane traffic of some QoS Flows of a PDU Session are directed to the Secondary RAN Node while the remaining QoS Flows are directed to the Master RAN Node, there will be two N3 tunnel terminations at the RAN for such PDU Session.",
+      "category": "Standards specifications"
+    },
+    "want": "Here are the questions: \n {\"question 29\": {\"question\": \"When can there be two N3 tunnel terminations at the RAN for a PDU Session? [3GPP Release 18]\", \"option 1\": \"When there are multiple PDU Session Ids for the PDU Session\", \"option 2\": \"When the QoS Flows of the PDU Session are split across the two RATs\", \"option 3\": \"When the PDU Session belongs to a specific Network Slice\", \"option 4\": \"When the Master RAN node is congested\", \"option 5\": \"When the Secondary RAN node is congested\", \"category\": \"Standards specifications\"}}"
+  }
+]
