@@ -12,53 +12,41 @@ the two runs is the effect of 3gpp-mcp.
 
 ## Results
 
-Results are not kept here. The harness produces them; the two places that
-report them are pinned to a database and a protocol, and duplicating a table
-into this file is what left the previous one stale for a month:
+Results are not kept here. The harness produces them; they are reported in
+[3gpp-mcp/BENCHMARK.md](https://github.com/higebu/3gpp-mcp/blob/main/BENCHMARK.md),
+pinned to a database and a protocol. Duplicating that table into this file is
+what left the previous one stale for a month.
 
-- [3gpp-mcp/BENCHMARK.md](https://github.com/higebu/3gpp-mcp/blob/main/BENCHMARK.md)
-  — TeleQnA and the specification-grounded tasks, three models
-- [higebu/teleqna-eval-results](https://github.com/higebu/teleqna-eval-results)
-  — every run's JSONL, the scripts that regenerate each number, and the
-  superseded protocol kept for the record
+**Per-question outputs are not published, and neither are the generated
+benchmark tasks.** A results file carries the question text, the options and
+the gold answer of every item it scored; publishing one puts the benchmark
+into the next crawl and into the next model's training data, after which no
+number measured on it means anything. TeleQnA is distributed as a
+password-protected archive for that reason, and the tasks generated from the
+specifications are withheld for the same one. What is published is the
+aggregate, the protocol, and the code that reproduces both.
 
 ## Method
 
 - **Dataset**: TeleQnA category `Standards specifications`, filtered to
   questions whose text contains `3GPP` (the category also contains
   IEEE 802.11 etc., which a 3GPP tool cannot help with): 1,509 questions.
-  All 1,509 carry a `[3GPP Release N]` tag, and for 1,471 of them that tag is
-  the only occurrence of `3GPP` in the text — so the filter is in practice
-  "questions carrying a release tag". Releases: 18 (780), 17 (641), 14 (55),
-  19 (17), 16 (16).
 - **Tools condition**: the 11 MCP tools of a 3gpp-mcp server (database:
   latest version of every spec) are bridged into the model API as function
-  tools; the model may call up to 20 rounds of tools per question, then is
-  asked to answer. Every model runs on its vendor's own API: GPT 5.6 Luna on
-  OpenAI's Responses API (`-api responses`, default reasoning effort),
-  Claude Sonnet 5 on Anthropic's OpenAI-compatible chat completions
-  endpoint, DeepSeek V4 Flash on `api.deepseek.com`.
-- **Baseline condition**: the same prompt with no tools attached. In the runs
-  reported above this was *not* true — the two conditions used different system
-  prompts — which is the reason those numbers are superseded. See
-  [Protocol](#protocol).
+  tools; the model may call tools until the round budget runs out, then is
+  asked to answer. The reported runs pass `-max-rounds 20`; the flag's default
+  is 8.
+- **Baseline condition**: the same prompt with no tools attached — exactly
+  the same, see [Protocol](#protocol).
 - **Answering**: the answer is extracted with strict-to-loose fallbacks and up
-  to 2 re-prompts, identically in both conditions. Every record now carries the
+  to 2 re-prompts, identically in both conditions. Every record carries the
   `parse_tier` that produced it, so a fallback parse can be re-scored as a
-  failure. Questions that errored mid-run were re-executed; under the current
-  protocol that is `-resume`, which records the `attempt` on each record. In
-  the superseded runs it was an ad-hoc merge, and one of them — Claude Sonnet 5
-  with tools — is a splice: 597 of its 1,509 questions were re-executed in a
-  second session after the API key ran out of credit.
-- **Generation**: no token limit and no temperature, matching the TeleQnA
-  paper's own settings; every pair uses identical settings on both conditions,
-  one run per condition. (Telco-RAG uses `max_tokens=4000`; GSMA evals sets
-  `temperature=0`.) An earlier pass with `max_tokens=8192` and an 8-round
-  budget measured +12.4/+10.9/+9.3pt; the cap suppressed only DeepSeek's
-  baseline (146 of its 1,509 baseline questions used at least 8192 completion
-  tokens, against 1 for Sonnet and 0 for Luna). The result files record tokens
-  summed over a question's rounds, not per generation, so this counts questions
-  that reached the cap rather than individual truncated completions.
+  failure.
+- **Generation**: no token limit (`-max-tokens 0`; the flag's default is 8192),
+  and every pair uses identical settings on both conditions. Sampling
+  temperature is whatever the pair sends: the reported DeepSeek runs send
+  `-temperature 0`, and the other two models reject a non-default sampling
+  parameter, so their requests carry none.
 - **Scoring**: exact match of the option number; an unanswered question counts
   as wrong. `strict_match` additionally records whether the answer string
   equals TeleQnA's own `option N: text`, which is how the upstream harness
@@ -75,12 +63,6 @@ Caveats:
   while the server database held the latest version of every spec; a
   release-pinned database (`3gpp-mcp build --release 17 ...`) would remove a
   potential source of answer drift. The observed gains occur despite it.
-- The superseded runs read from a deployed server whose database is rebuilt
-  weekly, so they cannot be reproduced exactly. Runs under the current protocol
-  serve a pinned database and record its identifier with `-db-manifest`.
-- Per-question outputs are not published: TeleQnA is deliberately
-  distributed as a password-protected archive to keep it out of crawled
-  training corpora, and raw run logs embed question content.
 - Each figure comes from a single run per condition, and re-running an
   unchanged condition moves it by up to about a point (Luna's baseline moved
   75.0% → 73.6% across two identical runs, with 151 individual questions
@@ -104,48 +86,23 @@ retrieval.
 | ID | Wording | Answer format |
 |---|---|---|
 | `teleqna` (default) | the system prompt of TeleQnA's own `evaluation_tools.py`, byte for byte | JSON, `"answer": "option N: text"` |
-| `cot` | the same text plus one sentence asking for step-by-step reasoning first | same |
+| `search` | the same text plus one sentence asking the model not to answer from memory | same |
 | `ansline` | the harness's original wording | `ANSWER: <n>` |
+
+A variant is appended to the shared prompt and sent to *both* conditions of a
+pair, so it never becomes a difference between them. `search` exists because a
+model that declines to call a tool measures itself rather than the server; the
+sentence names no source and no search terms, so it can only remove the
+model's discretion over whether to look.
 
 `teleqna` sends the bytes upstream sends: `TestFormatMatchesUpstreamBytes`
 compares the rendered user message against a golden file generated by
 evaluation_tools.py's own logic, and `TestTeleQnASystemIsUpstreamText` pins the
-system prompt. That includes reproducing an upstream quirk — its
-`if 'category' in questions_only` tests the outer dict of questions rather than
-the question itself, so the category field is never removed and every question
-upstream sends carries it. The field is one constant string across the filtered
-pool, so it cannot separate the two conditions.
-
-It deviates from upstream in two documented ways: one question per request
-(upstream batches five into one JSON object, which cannot host a tool-calling
-loop), and up to two re-prompts when the reply does not parse (upstream retries
-the whole batch up to five times). Both apply equally to both conditions.
-
-Regenerate the golden file after extracting the dataset:
-
-```bash
-python3 - <<'EOF'
-from copy import deepcopy
-import collections, json
-all_q = json.load(open('data/TeleQnA.json'), object_pairs_hook=collections.OrderedDict)
-def upstream(qid):
-    d = collections.OrderedDict({qid: all_q[qid]})
-    only = deepcopy(d)
-    for q in d:
-        only[q].pop("answer")
-        if 'explanation' in only[q]:
-            only[q].pop('explanation')
-        if 'category' in only:      # upstream's bug: never fires
-            only[q].pop('category')
-    return "Here are the questions: \n " + json.dumps(only)
-ids = [k for k, v in all_q.items()
-       if v.get('category','').startswith('Standards specifications') and '3GPP' in v['question']]
-picks = [ids[0]] + [k for k in ids if 'option 5' in all_q[k]][:1]
-json.dump([{"id": p, "fields": all_q[p], "want": upstream(p)} for p in picks],
-          open('internal/prompt/testdata/upstream_user_prompt.json','w'),
-          indent=2, ensure_ascii=False)
-EOF
-```
+system prompt. It deviates from upstream in two documented ways: one question
+per request (upstream batches five into one JSON object, which cannot host a
+tool-calling loop), and up to two re-prompts when the reply does not parse
+(upstream retries the whole batch up to five times). Both apply equally to
+both conditions.
 
 **Retrieval conditions**: no tools (`-mcp ''`), the model's own tool loop
 (default), or the non-agentic baseline `-fixedk N` — one BM25 search over the
@@ -248,24 +205,6 @@ beside the input, and stamps each record with the revision that graded it.
 
 The grader reads the database directly rather than through the MCP server: the
 tool under test must not be the one deciding whether its own citation exists.
-
-Its cost is in how the corpus is asked for a row, not in any Go function, so
-the benchmarks run against a real database and skip without one:
-
-```bash
-SPECBENCH_DB=3gpp-latest.db go test ./internal/specbench -bench . -benchtime 20x -run XXX
-```
-
-`BenchmarkAccessPath` compares the two ways to match a specification id. They
-return the same row, and the one that wraps the column in `UPPER()` takes about
-10,000 times longer because it reads all 545,003 sections to do it. Grading
-issued that query per record until it was measured: on the 18 `v2-*` runs, warm
-page cache, three repeats, that is **356.5s before and 1.24s after**.
-
-The Python scorer this replaced issued the same query and cost **372.9s** on the
-same files — the two were within 7% of each other, in both directions depending
-on the file mix. Neither implementation was slow because of its language, and a
-comparison between them was never the interesting measurement.
 
 ## Flags
 

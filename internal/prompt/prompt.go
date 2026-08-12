@@ -74,6 +74,12 @@ const teleqnaSystem = "\n" +
 // cotSuffix is the only text separating the "cot" variant from "teleqna". It is
 // appended to the shared system prompt for both conditions alike, so the pair
 // stays symmetric while the reasoning budget changes.
+//
+// It belongs to the superseded protocol and is part of no current measurement.
+// The control it provided — is the gain retrieval, or just a longer chain of
+// thought? — is answered by construction now that both conditions of a pair
+// send the same bytes. It is kept only so the archived runs that used it can
+// still be reproduced, and is deliberately absent from the README.
 const cotSuffix = "\nBefore you produce the JSON, work through the question step by step and " +
 	"explain your reasoning. The JSON object must be the last thing in your reply.\n"
 

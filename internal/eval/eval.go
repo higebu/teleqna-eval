@@ -42,8 +42,8 @@ type Options struct {
 	FixedK int
 }
 
-// Result is one JSONL record; the field names are consumed by the analysis
-// scripts in teleqna-eval-results, so do not rename them.
+// Result is one JSONL record; the field names are the wire format the analysis
+// scripts read, so do not rename them.
 type Result struct {
 	ID            string        `json:"id"`
 	Category      string        `json:"category"`
