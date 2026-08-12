@@ -77,6 +77,21 @@ const teleqnaSystem = "\n" +
 const cotSuffix = "\nBefore you produce the JSON, work through the question step by step and " +
 	"explain your reasoning. The JSON object must be the last thing in your reply.\n"
 
+// searchSuffix is the only text separating the "search" variant from
+// "teleqna". The measurement it exists for: two of the three models answered
+// most TeleQnA questions without calling a tool at all, and on those questions
+// the tools condition scored the same as no tools, because nothing was
+// retrieved. This asks for retrieval unconditionally, so the tools condition
+// actually measures the tools.
+//
+// Like cotSuffix it is appended for both conditions alike, which keeps the pair
+// symmetric and is what the no-tools run is for: it shows what the wording
+// alone is worth to a model that has nothing to search. The instruction names
+// no source and no search terms, so it cannot point at an answer — it only
+// removes the model's discretion over whether to look.
+const searchSuffix = "\nDo not answer from memory. Search the specifications first and base your " +
+	"answer on the text you retrieve, even when you are confident you already know the answer.\n"
+
 const ansLineSystem = `You are a telecommunications standards expert answering multiple-choice questions about 3GPP specifications.
 
 Reply with your reasoning followed by a final line in exactly this format:
@@ -100,6 +115,14 @@ func init() {
 	register(&Prompt{
 		ID:     "cot",
 		System: teleqnaSystem + cotSuffix,
+		Format: formatTeleQnA,
+		Retry: "Your reply did not contain the JSON object. Reply now with the JSON object only, " +
+			"in the format given above.",
+		Parse: parseTeleQnA,
+	})
+	register(&Prompt{
+		ID:     "search",
+		System: teleqnaSystem + searchSuffix,
 		Format: formatTeleQnA,
 		Retry: "Your reply did not contain the JSON object. Reply now with the JSON object only, " +
 			"in the format given above.",
