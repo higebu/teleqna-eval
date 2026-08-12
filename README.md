@@ -12,52 +12,15 @@ the two runs is the effect of 3gpp-mcp.
 
 ## Results
 
-> **These numbers come from the superseded protocol.** They were measured
-> before the two conditions were made to share one prompt (see
-> [Protocol](#protocol)): the baseline was told to keep its reasoning brief and
-> the tools condition was not, so the effect below mixes retrieval with
-> reasoning length. They are kept here until the re-run under the current
-> protocol replaces them.
+Results are not kept here. The harness produces them; the two places that
+report them are pinned to a database and a protocol, and duplicating a table
+into this file is what left the previous one stale for a month:
 
-All 1,509 `Standards specifications` TeleQnA questions tagged `3GPP`, same
-question set for every run, each model on its vendor's own API, evaluated
-2026-08-09:
-
-| Model | No tools | With 3gpp-mcp | Δ | Win/loss pairs¹ | McNemar |
-|---|---|---|---|---|---|
-| DeepSeek V4 Flash | 75.3% (1137/1509) | **86.5%** (1305/1509) | +11.1pt | 225 / 57 | χ²=98.9, p<10⁻²² |
-| Claude Sonnet 5 | 73.5% (1109/1509) | **84.5%** (1275/1509) | +11.0pt | 241 / 75 | χ²=86.2, p<10⁻¹⁹ |
-| GPT 5.6 Luna | 73.6% (1110/1509) | **85.0%** (1282/1509) | **+11.4pt** | 242 / 70 | χ²=93.7, p<10⁻²¹ |
-
-¹ questions only the tools run answered correctly / only the baseline answered correctly.
-
-Observations:
-
-- The effect reproduces across three unrelated model families, each on its
-  own vendor's API, so it is a property of the tool access, not of one model
-  or one serving stack. The three deltas land within 0.4pt of each other.
-- 68 of the 1,509 questions were answered correctly by all three models with
-  tools and by none of them without tools, against 16.2 expected if the six
-  runs were independent — so such questions exist. Which questions they are is
-  mostly noise: the 8-round pass produces a set of 66 that shares only 41
-  members with this one (Jaccard 0.44), so the individual ids are not listed.
-- Tool-call efficiency differs sharply: Claude Sonnet 5 averaged 3.3
-  calls/question, GPT 5.6 Luna 5.7, DeepSeek V4 Flash 10.1 — Sonnet reaches
-  the same gain with a third of the searches.
-- Questions that still hit the 20-round tool budget: DeepSeek 61, Sonnet 47,
-  Luna 7.
-
-### Usage per run (tools / baseline)
-
-| Run | Prompt tokens | Completion tokens | Tool calls |
-|---|---|---|---|
-| DeepSeek V4 Flash | 164.7M / 0.33M | 5.97M / 4.83M | 15,222 |
-| Claude Sonnet 5 | 76.6M / 0.33M | 1.22M / 0.14M | 4,967 |
-| GPT 5.6 Luna | 67.0M / 0.22M | 0.83M / 0.52M | 8,652 |
-
-Wall-clock per pair was 25–60 minutes at 8–32 concurrent questions; a
-single-instance 3gpp-mcp server absorbed 32 parallel tool streams without
-errors.
+- [3gpp-mcp/BENCHMARK.md](https://github.com/higebu/3gpp-mcp/blob/main/BENCHMARK.md)
+  — TeleQnA and the specification-grounded tasks, three models
+- [higebu/teleqna-eval-results](https://github.com/higebu/teleqna-eval-results)
+  — every run's JSONL, the scripts that regenerate each number, and the
+  superseded protocol kept for the record
 
 ## Method
 
