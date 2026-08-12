@@ -354,6 +354,16 @@ func readRecords(path string) ([]eval.Result, error) {
 func checkResume(metaPath string, m meta) error {
 	data, err := os.ReadFile(metaPath)
 	if os.IsNotExist(err) {
+		// No metadata means the settings behind those answers are unknown,
+		// which is the same failure as knowing they differ: the records would
+		// be reused and then labelled with this run's settings. An empty or
+		// absent results file is a fresh start and is allowed, since the run
+		// scripts pass -resume unconditionally.
+		if fi, statErr := os.Stat(m.Out); statErr == nil && fi.Size() > 0 {
+			return fmt.Errorf("-resume: %s has records but %s is missing, so what produced "+
+				"them cannot be checked against this run\nwrite to a different -out, or drop "+
+				"-resume to start over", m.Out, metaPath)
+		}
 		return nil
 	}
 	if err != nil {

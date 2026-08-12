@@ -191,3 +191,26 @@ func TestCheckResume(t *testing.T) {
 		}
 	}
 }
+
+// Metadata missing is not the same as metadata matching: the settings behind
+// those answers are unknown, and reusing them would label them with this run's.
+func TestCheckResumeRefusesRecordsWithoutMetadata(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "out.jsonl")
+	m := meta{Model: "m", Out: out}
+
+	if err := checkResume(filepath.Join(dir, "out.meta.json"), m); err != nil {
+		t.Errorf("no results file yet, want no error: %v", err)
+	}
+	if err := os.WriteFile(out, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkResume(filepath.Join(dir, "out.meta.json"), m); err != nil {
+		t.Errorf("empty results file, want no error: %v", err)
+	}
+
+	writeRecords(t, out, eval.Result{ID: "question 1", Attempt: 1})
+	if err := checkResume(filepath.Join(dir, "out.meta.json"), m); err == nil {
+		t.Error("records with no metadata, want an error")
+	}
+}
