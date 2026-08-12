@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -393,6 +394,34 @@ func checkResume(metaPath string, m meta) error {
 		}
 		return fmt.Sprint(*t)
 	}
+	// The MCP server and the tools it offered are part of what an answer means
+	// in the agentic condition, and -db-manifest is optional, so neither can be
+	// left to it. The endpoint address is not compared: this server gets
+	// restarted on whatever port is free, which changes the URL and nothing
+	// else.
+	server := func(m map[string]string) string {
+		if len(m) == 0 {
+			return "none"
+		}
+		keys := make([]string, 0, len(m))
+		for k := range m {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		parts := make([]string, 0, len(keys))
+		for _, k := range keys {
+			parts = append(parts, k+"="+m[k])
+		}
+		return strings.Join(parts, " ")
+	}
+	tools := func(t []string) string {
+		if len(t) == 0 {
+			return "none"
+		}
+		s := append([]string(nil), t...)
+		sort.Strings(s)
+		return strings.Join(s, ",")
+	}
 	var diff []string
 	for _, f := range []struct{ name, was, now string }{
 		{"model", old.Model, m.Model},
@@ -409,6 +438,8 @@ func checkResume(metaPath string, m meta) error {
 		{"seed", fmt.Sprint(old.Seed), fmt.Sprint(m.Seed)},
 		{"questions", fmt.Sprint(old.Questions), fmt.Sprint(m.Questions)},
 		{"db_manifest", old.DBManifest, m.DBManifest},
+		{"mcp_server", server(old.MCPServer), server(m.MCPServer)},
+		{"mcp_tools", tools(old.MCPTools), tools(m.MCPTools)},
 	} {
 		if f.was != f.now {
 			diff = append(diff, fmt.Sprintf("  %s: %q -> %q", f.name, f.was, f.now))

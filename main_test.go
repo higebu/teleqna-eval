@@ -164,7 +164,9 @@ func TestCheckResume(t *testing.T) {
 	dir := t.TempDir()
 	base := meta{Model: "m", API: "chat", Retrieval: "agentic", PromptID: "teleqna",
 		PromptSHA: "abc", MaxRounds: 20, Seed: 42, Questions: 1509, DBManifest: "v2",
-		Out: "results/out.jsonl"}
+		MCPServer: map[string]string{"name": "3gpp-mcp", "version": "dev"},
+		MCPTools:  []string{"search", "get_section"},
+		Out:       "results/out.jsonl"}
 
 	path := filepath.Join(dir, "none.meta.json")
 	if err := checkResume(path, base); err != nil {
@@ -177,6 +179,8 @@ func TestCheckResume(t *testing.T) {
 	}
 	same := base
 	same.RunID, same.StartedAt, same.HarnessSHA, same.Repeat = "later", "now", "deadbeef", 3
+	same.MCPURL = "http://localhost:9999/mcp/"        // the server moved port
+	same.MCPTools = []string{"get_section", "search"} // ...and listed its tools in another order
 	if err := checkResume(path, same); err != nil {
 		t.Errorf("only the free fields differ, want no error: %v", err)
 	}
@@ -185,6 +189,11 @@ func TestCheckResume(t *testing.T) {
 		"prompt":      func() meta { m := base; m.PromptSHA = "def"; return m }(),
 		"retrieval":   func() meta { m := base; m.Retrieval = "fixedk"; return m }(),
 		"db_manifest": func() meta { m := base; m.DBManifest = "v3"; return m }(),
+		// The retrieval environment decides what an answer means as much as
+		// the model does, and -db-manifest is optional, so it cannot be the
+		// only thing standing for the corpus.
+		"mcp_server": func() meta { m := base; m.MCPServer = map[string]string{"name": "other"}; return m }(),
+		"mcp_tools":  func() meta { m := base; m.MCPTools = []string{"search"}; return m }(),
 	} {
 		if err := checkResume(path, m); err == nil {
 			t.Errorf("%s differs, want an error", name)
