@@ -71,18 +71,6 @@ const teleqnaSystem = "\n" +
 	"...\n" +
 	"}\n"
 
-// cotSuffix is the only text separating the "cot" variant from "teleqna". It is
-// appended to the shared system prompt for both conditions alike, so the pair
-// stays symmetric while the reasoning budget changes.
-//
-// It belongs to the superseded protocol and is part of no current measurement.
-// The control it provided — is the gain retrieval, or just a longer chain of
-// thought? — is answered by construction now that both conditions of a pair
-// send the same bytes. It is kept only so the archived runs that used it can
-// still be reproduced, and is deliberately absent from the README.
-const cotSuffix = "\nBefore you produce the JSON, work through the question step by step and " +
-	"explain your reasoning. The JSON object must be the last thing in your reply.\n"
-
 // searchSuffix is the only text separating the "search" variant from
 // "teleqna". The measurement it exists for: two of the three models answered
 // most TeleQnA questions without calling a tool at all, and on those questions
@@ -90,7 +78,7 @@ const cotSuffix = "\nBefore you produce the JSON, work through the question step
 // retrieved. This asks for retrieval unconditionally, so the tools condition
 // actually measures the tools.
 //
-// Like cotSuffix it is appended for both conditions alike, which keeps the pair
+// It is appended for both conditions alike, which keeps the pair
 // symmetric and is what the no-tools run is for: it shows what the wording
 // alone is worth to a model that has nothing to search. The instruction names
 // no source and no search terms, so it cannot point at an answer — it only
@@ -113,14 +101,6 @@ func init() {
 	register(&Prompt{
 		ID:     "teleqna",
 		System: teleqnaSystem,
-		Format: formatTeleQnA,
-		Retry: "Your reply did not contain the JSON object. Reply now with the JSON object only, " +
-			"in the format given above.",
-		Parse: parseTeleQnA,
-	})
-	register(&Prompt{
-		ID:     "cot",
-		System: teleqnaSystem + cotSuffix,
 		Format: formatTeleQnA,
 		Retry: "Your reply did not contain the JSON object. Reply now with the JSON object only, " +
 			"in the format given above.",

@@ -39,10 +39,10 @@ func TestTeleQnASystemIsUpstreamText(t *testing.T) {
 	if p.System != want {
 		t.Errorf("system prompt drifted from upstream:\n got %q\nwant %q", p.System, want)
 	}
-	// The cot variant may only add to it, never edit it.
-	cot, _ := Get("cot")
-	if !strings.HasPrefix(cot.System, want) {
-		t.Error("cot does not build on the upstream prompt")
+	// A variant may only add to it, never edit it.
+	search, _ := Get("search")
+	if !strings.HasPrefix(search.System, want) {
+		t.Error("search does not build on the upstream prompt")
 	}
 }
 
@@ -152,7 +152,7 @@ func TestParseAnswerLine(t *testing.T) {
 
 func TestSHA256IdentifiesTheWording(t *testing.T) {
 	a, _ := Get("teleqna")
-	b, _ := Get("cot")
+	b, _ := Get("search")
 	if a.SHA256() == b.SHA256() {
 		t.Error("variants with different wording share a hash")
 	}
