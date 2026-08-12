@@ -445,6 +445,14 @@ func checkResume(metaPath string, m meta) error {
 			diff = append(diff, fmt.Sprintf("  %s: %q -> %q", f.name, f.was, f.now))
 		}
 	}
+	// Two servers that both refuse to identify themselves compare equal as
+	// "none", which is not a match — it is an unanswered question. A fresh run
+	// against such a server is fine; a resume cannot be checked against it.
+	if m.MCPURL != "" && len(m.MCPServer) == 0 && len(old.MCPServer) == 0 {
+		return fmt.Errorf("-resume: neither %s nor this run could identify the MCP server at %s, "+
+			"so there is nothing to check the existing records against\nrerun without -resume, or "+
+			"point -mcp at a server that answers initialize", metaPath, m.MCPURL)
+	}
 	if len(diff) > 0 {
 		return fmt.Errorf("-resume: %s was measured with different settings, so its records "+
 			"are not this run's:\n%s\nwrite to a different -out, or drop -resume to start over",

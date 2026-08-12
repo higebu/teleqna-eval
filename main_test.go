@@ -248,3 +248,38 @@ func TestPlanResumeTerminatesAnUnterminatedRecord(t *testing.T) {
 		t.Errorf("file does not end in a newline, the next append would glue onto it: %q", data)
 	}
 }
+
+// Two servers that both refuse to identify themselves compare equal as "none",
+// which is not a match but an unanswered question.
+func TestCheckResumeRefusesAnUnidentifiedServer(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "out.meta.json")
+	anon := meta{Model: "m", Retrieval: "agentic", MCPURL: "http://localhost:8082/mcp/",
+		MCPTools: []string{"search"}, Out: filepath.Join(dir, "out.jsonl")}
+	if err := writeMeta(path, anon); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkResume(path, anon); err == nil {
+		t.Error("neither side identified the server, want an error")
+	}
+
+	// The same run against a server that does identify itself is fine.
+	named := anon
+	named.MCPServer = map[string]string{"name": "3gpp-mcp", "version": "dev"}
+	if err := writeMeta(path, named); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkResume(path, named); err != nil {
+		t.Errorf("identified server, want no error: %v", err)
+	}
+
+	// A run with no tools has no server to identify.
+	base := meta{Model: "m", Retrieval: "none", Out: filepath.Join(dir, "none.jsonl")}
+	p2 := filepath.Join(dir, "none.meta.json")
+	if err := writeMeta(p2, base); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkResume(p2, base); err != nil {
+		t.Errorf("no MCP endpoint, want no error: %v", err)
+	}
+}
