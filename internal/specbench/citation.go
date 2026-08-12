@@ -192,7 +192,13 @@ func (g *Grader) citationTargets(r Record) []target {
 			out = append(out, target{"schema", alt})
 		}
 		return withName(out)
-	case "allof":
+	case "allof", "describe", "named", "lookup":
+		// The describe/named/lookup ladder asks for the same merged property
+		// set as allof, so a member the allOf pulls in is a true citation of the
+		// answer here too. It matters more on the first two rungs: they are the
+		// only OpenAPI questions that do not tell the model which document to
+		// name, so their citation is being measured rather than copied out of
+		// the question.
 		out := []target{{"schema", p.Schema}}
 		for _, m := range g.allofMembers(r) {
 			out = append(out, target{"schema", m})

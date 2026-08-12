@@ -711,6 +711,11 @@ def main():
         print(f"{path}: {len(tasks)} tasks", file=sys.stderr)
         specs = collections.Counter(t["spec_id"] for t in tasks)
         print(f"  specifications: {dict(specs.most_common(6))}", file=sys.stderr)
+        # The describe/named pool is the one whose size is a result: what the
+        # uniqueness test rejected is the evidence that it ran.
+        if name == "openapi-describe":
+            print(openapi_tasks.describe_report(_openapi_store(conn), args.n,
+                                                random.Random(args.seed)), file=sys.stderr)
         if args.verify:
             bad = verify(conn, tasks)
             failures += len(bad)

@@ -258,6 +258,9 @@ func (c *Corpus) re(pattern string) *regexp.Regexp {
 // openapiDocExact looks a document up by its stored spec_id, which is how the
 // task files name it — unlike a citation, which is normalised first.
 func (c *Corpus) openapiDocExact(spec, api string) (string, bool) {
+	if c.db == nil { // an index-only corpus, as the citation tests build
+		return "", false
+	}
 	var content sql.NullString
 	err := c.db.QueryRow("SELECT content FROM openapi_specs WHERE spec_id=? AND api_name=?",
 		spec, api).Scan(&content)

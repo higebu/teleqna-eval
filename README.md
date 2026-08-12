@@ -310,6 +310,31 @@ clause states, in the notation that clause uses: the IE clause writes
 decides which walk counts. Each task records whether its IE clause states the
 answer too (`stratum`), because that is measured rather than assumed.
 
+**Describing a target instead of naming it, and the uniqueness test that costs.**
+Every other type hands the model an identifier — a schema name, an operation, an
+owner — so fetching the named document is a correct route and searching for it
+is only a substitute. `openapi-describe` designates the schema by the words the
+document uses to say what it is *for*, and `openapi-named` designates the same
+schema by its name; the two are generated from one pool, so they ask for the
+same gold about the same elements and differ in nothing else. Neither says which
+document declares it, which also makes them the only OpenAPI types whose
+citation is not already written in the question.
+
+`--verify` is not enough for them. Re-deriving a gold checks that the *answer*
+still comes out of the document; it does not check that the *question* has one
+answer, and a description that fits a second schema marks a model wrong for
+naming that one — the failure six grading fixes have already been spent on, each
+of which had understated the tool. So a candidate is emitted only when no other
+schema in the store carries that description, a near-duplicate of it, or the
+same property set, and only when the description does not say the schema's name
+back in other words; `--verify` re-runs every one of those checks rather than
+only the re-derivation. The test is most of the type: of the 5,664 described
+schemas in the pinned corpus, 22 survive it, and 1,176 of the rejections are
+3GPP writing a description that is the schema name expanded — "Default Unrelated
+Class" for `DefaultUnrelatedClass`. The generator prints what each check
+removed, because a filter whose cost nobody can see is a filter nobody can
+check.
+
 Its cost is in how the corpus is asked for a row, not in any Go function, so
 the benchmarks run against a real database and skip without one:
 

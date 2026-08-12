@@ -120,6 +120,23 @@ func TestCitationTargetsOneOfIncludesAlternatives(t *testing.T) {
 	}
 }
 
+// describe and named withhold the document the schema lives in, so the schema
+// the probe records is the only thing a citation can be graded against — and it
+// has to come from the probe, because their ids carry an API name the question
+// never states. lookup states it and is graded the same way, so that the three
+// rungs differ in the question and not in the scoring.
+func TestCitationTargetsDescribeNamedLookup(t *testing.T) {
+	for _, kind := range []string{"describe", "named", "lookup"} {
+		task := Task{ID: "t4", Probe: &Probe{Kind: kind, Schema: "UeContextTransferReqData"}}
+		g := NewGrader(newTestCorpus(), []Task{task})
+		got := g.citationTargets(Record{ID: "t4"})
+		want := []target{{"schema", "UeContextTransferReqData"}}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: got %v, want %v", kind, got, want)
+		}
+	}
+}
+
 func TestCitationTargetsWithoutProbe(t *testing.T) {
 	// Tasks generated before the probe existed fall back to the id, whose last
 	// segment is the schema name.
