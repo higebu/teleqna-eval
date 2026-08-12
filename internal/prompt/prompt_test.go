@@ -117,39 +117,6 @@ func TestParseTeleQnA(t *testing.T) {
 
 // Double-digit options must survive: the previous parser matched a single digit
 // and would have read "option 10" as option 1.
-func TestParseTwoDigitOption(t *testing.T) {
-	if got := parseTeleQnA(`{"answer": "option 10: j"}`); got.Option != 10 {
-		t.Errorf("got %+v", got)
-	}
-	if got := parseAnswerLine("ANSWER: 12"); got.Option != 12 {
-		t.Errorf("got %+v", got)
-	}
-}
-
-func TestParseAnswerLine(t *testing.T) {
-	tests := []struct {
-		in   string
-		want int
-		tier string
-	}{
-		{"reasoning\nANSWER: 3", 3, TierAnswerLine},
-		{"> **ANSWER:** 4", 4, TierAnswerLine},
-		{"ANSWER:2", 2, TierAnswerLine},
-		{"ANSWER：2", 2, TierAnswerLine}, // full-width colon
-		{"ANSWER: option 1", 1, TierAnswerLine},
-		{"the answer: 5 is right", 5, TierAnswerAny},
-		{"option 1 is wrong, option 2 is right", 2, TierOptionScan},
-		{"no answer here", 0, TierNone},
-		{"", 0, TierNone},
-	}
-	for _, tt := range tests {
-		got := parseAnswerLine(tt.in)
-		if got.Option != tt.want || got.Tier != tt.tier {
-			t.Errorf("parseAnswerLine(%q) = %+v, want option %d tier %s", tt.in, got, tt.want, tt.tier)
-		}
-	}
-}
-
 func TestSHA256IdentifiesTheWording(t *testing.T) {
 	a, _ := Get("teleqna")
 	b, _ := Get("search")

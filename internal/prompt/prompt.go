@@ -33,8 +33,6 @@ type Parsed struct {
 const (
 	TierJSON        = "json"         // a JSON object with an "answer" field
 	TierAnswerField = "answer_field" // "answer": "option N" recovered by regex
-	TierAnswerLine  = "answer_line"  // an ANSWER: line at the start of a line
-	TierAnswerAny   = "answer_any"   // ANSWER: anywhere in the text
 	TierOptionScan  = "option_scan"  // the last "option N" mentioned anywhere
 	TierNone        = "none"
 )
@@ -86,13 +84,6 @@ const teleqnaSystem = "\n" +
 const searchSuffix = "\nDo not answer from memory. Search the specifications first and base your " +
 	"answer on the text you retrieve, even when you are confident you already know the answer.\n"
 
-const ansLineSystem = `You are a telecommunications standards expert answering multiple-choice questions about 3GPP specifications.
-
-Reply with your reasoning followed by a final line in exactly this format:
-ANSWER: <option number>
-
-The final line must contain only one option number.`
-
 var registry = map[string]*Prompt{}
 
 func register(p *Prompt) { registry[p.ID] = p }
@@ -113,13 +104,6 @@ func init() {
 		Retry: "Your reply did not contain the JSON object. Reply now with the JSON object only, " +
 			"in the format given above.",
 		Parse: parseTeleQnA,
-	})
-	register(&Prompt{
-		ID:     "ansline",
-		System: ansLineSystem,
-		Format: teleqna.Format,
-		Retry:  "Your reply did not contain a readable answer. Reply now with one line only: ANSWER: <option number>",
-		Parse:  parseAnswerLine,
 	})
 }
 
@@ -195,8 +179,6 @@ func jsonString(s string) []byte {
 
 var (
 	answerFieldRe = regexp.MustCompile(`(?is)"answer"\s*:\s*"\s*(?:option\s*)?(\d+)`)
-	answerLineRe  = regexp.MustCompile(`(?mi)^[\s>*#]*ANSWER\s*[:：]\s*\**\s*(?:option\s*)?(\d+)`)
-	answerAnyRe   = regexp.MustCompile(`(?i)ANSWER\s*[:：]\s*\**\s*(?:option\s*)?(\d+)`)
 	optionAnyRe   = regexp.MustCompile(`(?i)\boption\s*(\d+)\b`)
 	optionNumRe   = regexp.MustCompile(`(?i)option\s*(\d+)`)
 )
@@ -217,18 +199,6 @@ func parseTeleQnA(text string) Parsed {
 	if mm := answerFieldRe.FindStringSubmatch(text); mm != nil {
 		n, _ := strconv.Atoi(mm[1])
 		return Parsed{Option: n, Raw: mm[0], Tier: TierAnswerField}
-	}
-	return scanOption(text)
-}
-
-func parseAnswerLine(text string) Parsed {
-	if mm := answerLineRe.FindStringSubmatch(text); mm != nil {
-		n, _ := strconv.Atoi(mm[1])
-		return Parsed{Option: n, Raw: strings.TrimSpace(mm[0]), Tier: TierAnswerLine}
-	}
-	if mm := answerAnyRe.FindStringSubmatch(text); mm != nil {
-		n, _ := strconv.Atoi(mm[1])
-		return Parsed{Option: n, Raw: strings.TrimSpace(mm[0]), Tier: TierAnswerAny}
 	}
 	return scanOption(text)
 }

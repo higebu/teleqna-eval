@@ -126,15 +126,15 @@ func TestPromptIdenticalAcrossConditions(t *testing.T) {
 func TestOneToolRoundThenAnswer(t *testing.T) {
 	be := &fakeBackend{turns: []*llm.Turn{
 		toolTurn("search", `{"q":"5G"}`),
-		{Content: "reasoning\nANSWER: 2", Usage: llm.Usage{Prompt: 30, Completion: 5, CacheRead: 20, CacheWrite: 3}},
+		{Content: "reasoning\n{\"question 1\": {\"answer\": \"option 2: b\"}}", Usage: llm.Usage{Prompt: 30, Completion: 5, CacheRead: 20, CacheWrite: 3}},
 	}}
 	tools := &fakeTools{text: "spec text"}
-	r, tr := One(be, tools, question, opts(t, "ansline", 8, 100))
+	r, tr := One(be, tools, question, opts(t, "teleqna", 8, 100))
 
 	if !r.Correct || r.Predicted != 2 || r.Rounds != 2 {
 		t.Errorf("result = %+v", r)
 	}
-	if r.Retrieval != RetrievalAgentic || r.ParseTier != prompt.TierAnswerLine {
+	if r.Retrieval != RetrievalAgentic || r.ParseTier != prompt.TierJSON {
 		t.Errorf("retrieval = %q, tier = %q", r.Retrieval, r.ParseTier)
 	}
 	if len(r.ToolCalls) != 1 || r.ToolCalls[0].Name != "search" || r.ToolCalls[0].Args != `{"q":"5G"}` {
@@ -156,8 +156,8 @@ func TestOneToolRoundThenAnswer(t *testing.T) {
 }
 
 func TestOneNoTools(t *testing.T) {
-	be := &fakeBackend{turns: []*llm.Turn{{Content: "ANSWER: 1"}}}
-	r, _ := One(be, nil, question, opts(t, "ansline", 8, 100))
+	be := &fakeBackend{turns: []*llm.Turn{{Content: `{"question 1": {"answer": "option 1: a"}}`}}}
+	r, _ := One(be, nil, question, opts(t, "teleqna", 8, 100))
 	if r.Predicted != 1 || r.Correct || r.Retrieval != RetrievalNone {
 		t.Errorf("result = %+v", r)
 	}
@@ -168,31 +168,31 @@ func TestOneNoTools(t *testing.T) {
 
 func TestOneAnswerRetries(t *testing.T) {
 	be := &fakeBackend{turns: []*llm.Turn{{Content: "no idea"}}}
-	r, _ := One(be, nil, question, opts(t, "ansline", 8, 100))
+	r, _ := One(be, nil, question, opts(t, "teleqna", 8, 100))
 	if r.Predicted != 0 || r.Correct || r.Rounds != 3 || r.AnswerRetries != 2 {
 		t.Errorf("result = %+v", r)
 	}
 	if r.ParseTier != prompt.TierNone {
 		t.Errorf("tier = %q", r.ParseTier)
 	}
-	if len(be.users) != 2 || !strings.Contains(be.users[0], "readable answer") {
+	if len(be.users) != 2 || !strings.Contains(be.users[0], "JSON object") {
 		t.Errorf("reprompts = %v", be.users)
 	}
 }
 
 // The answer may only be in the reasoning field of a reasoning model.
 func TestOneAnswerFromReasoning(t *testing.T) {
-	be := &fakeBackend{turns: []*llm.Turn{{Reasoning: "so ANSWER: 2"}}}
-	if r, _ := One(be, nil, question, opts(t, "ansline", 8, 0)); r.Predicted != 2 || !r.Correct {
+	be := &fakeBackend{turns: []*llm.Turn{{Reasoning: `so {"question 1": {"answer": "option 2: b"}}`}}}
+	if r, _ := One(be, nil, question, opts(t, "teleqna", 8, 0)); r.Predicted != 2 || !r.Correct {
 		t.Errorf("result = %+v", r)
 	}
 }
 
 func TestOneMaxRounds(t *testing.T) {
 	be := &fakeBackend{turns: []*llm.Turn{
-		toolTurn("search", "{}"), toolTurn("search", "{}"), {Content: "ANSWER: 2"},
+		toolTurn("search", "{}"), toolTurn("search", "{}"), {Content: `{"question 1": {"answer": "option 2: b"}}`},
 	}}
-	r, _ := One(be, &fakeTools{text: "x"}, question, opts(t, "ansline", 2, 100))
+	r, _ := One(be, &fakeTools{text: "x"}, question, opts(t, "teleqna", 2, 100))
 	if r.Rounds != 3 || r.Predicted != 2 || !r.BudgetExhausted {
 		t.Errorf("result = %+v", r)
 	}
@@ -206,15 +206,15 @@ func TestOneMaxRounds(t *testing.T) {
 
 func TestOneStepError(t *testing.T) {
 	be := &fakeBackend{err: errors.New("boom")}
-	r, _ := One(be, nil, question, opts(t, "ansline", 8, 0))
+	r, _ := One(be, nil, question, opts(t, "teleqna", 8, 0))
 	if r.Error != "boom" || r.Predicted != 0 || r.Correct {
 		t.Errorf("result = %+v", r)
 	}
 }
 
 func TestOneToolError(t *testing.T) {
-	be := &fakeBackend{turns: []*llm.Turn{toolTurn("search", "{}"), {Content: "ANSWER: 2"}}}
-	r, tr := One(be, &fakeTools{err: errors.New("timeout")}, question, opts(t, "ansline", 8, 100))
+	be := &fakeBackend{turns: []*llm.Turn{toolTurn("search", "{}"), {Content: `{"question 1": {"answer": "option 2: b"}}`}}}
+	r, tr := One(be, &fakeTools{err: errors.New("timeout")}, question, opts(t, "teleqna", 8, 100))
 	if r.Error != "" || !r.Correct {
 		t.Errorf("result = %+v", r)
 	}
@@ -277,10 +277,10 @@ func jobsOf(qs []teleqna.Question) []Job {
 }
 
 func TestRun(t *testing.T) {
-	be := &fakeBackend{turns: []*llm.Turn{{Content: "ANSWER: 2", Usage: llm.Usage{Prompt: 7, Completion: 1}}}}
+	be := &fakeBackend{turns: []*llm.Turn{{Content: `{"question 1": {"answer": "option 2: b"}}`, Usage: llm.Usage{Prompt: 7, Completion: 1}}}}
 	qs := []teleqna.Question{question, {ID: "question 2", Text: "Q2?", Answer: 1, Options: map[int]string{1: "a", 2: "b"}}}
 	var buf, trace strings.Builder
-	o := opts(t, "ansline", 8, 0)
+	o := opts(t, "teleqna", 8, 0)
 	o.Workers = 2
 	s := Run(be, nil, jobsOf(qs), o, &buf, &trace)
 
@@ -296,7 +296,7 @@ func TestRun(t *testing.T) {
 		if err := json.Unmarshal([]byte(line), &r); err != nil {
 			t.Fatalf("%v: %s", err, line)
 		}
-		if r.Predicted != 2 || r.Attempt != 1 || r.PromptID != "ansline" || r.PromptSHA == "" {
+		if r.Predicted != 2 || r.Attempt != 1 || r.PromptID != "teleqna" || r.PromptSHA == "" {
 			t.Errorf("record = %+v", r)
 		}
 	}
@@ -306,9 +306,9 @@ func TestRun(t *testing.T) {
 }
 
 func TestRunZeroWorkers(t *testing.T) {
-	be := &fakeBackend{turns: []*llm.Turn{{Content: "ANSWER: 2"}}}
+	be := &fakeBackend{turns: []*llm.Turn{{Content: `{"question 1": {"answer": "option 2: b"}}`}}}
 	var buf strings.Builder
-	o := opts(t, "ansline", 8, 0)
+	o := opts(t, "teleqna", 8, 0)
 	o.Workers = 0
 	if s := Run(be, nil, jobsOf([]teleqna.Question{question}), o, &buf, nil); s.Correct != 1 {
 		t.Errorf("summary = %+v", s)
@@ -319,7 +319,7 @@ func TestRunZeroWorkers(t *testing.T) {
 func TestRunCountsLooseParses(t *testing.T) {
 	be := &fakeBackend{turns: []*llm.Turn{{Content: "I would pick option 2"}}}
 	var buf strings.Builder
-	o := opts(t, "ansline", 8, 0)
+	o := opts(t, "teleqna", 8, 0)
 	if s := Run(be, nil, jobsOf([]teleqna.Question{question}), o, &buf, nil); s.LooseParse != 1 {
 		t.Errorf("summary = %+v", s)
 	}

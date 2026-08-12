@@ -63,11 +63,10 @@ Caveats:
   while the server database held the latest version of every spec; a
   release-pinned database (`3gpp-mcp build --release 17 ...`) would remove a
   potential source of answer drift. The observed gains occur despite it.
-- Each figure comes from a single run per condition, and re-running an
-  unchanged condition moves it by up to about a point (Luna's baseline moved
-  75.0% → 73.6% across two identical runs, with 151 individual questions
-  flipping). The ~11pt effect is far larger than that, but do not read the
-  differences *between* models as meaningful.
+- Re-running an unchanged condition moves it by up to about a point, and
+  individual questions flip in the hundreds while the total barely moves. The
+  paired conditions are measured three times each for that reason; a single
+  pass, such as the fixed-k baseline, carries that much noise on its own.
 
 ## Protocol
 
@@ -87,7 +86,6 @@ retrieval.
 |---|---|---|
 | `teleqna` (default) | the system prompt of TeleQnA's own `evaluation_tools.py`, byte for byte | JSON, `"answer": "option N: text"` |
 | `search` | the same text plus one sentence asking the model not to answer from memory | same |
-| `ansline` | the harness's original wording | `ANSWER: <n>` |
 
 A variant is appended to the shared prompt and sent to *both* conditions of a
 pair, so it never becomes a difference between them. `search` exists because a
