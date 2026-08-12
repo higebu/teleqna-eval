@@ -286,6 +286,18 @@ beside the input, and stamps each record with the revision that graded it.
 The grader reads the database directly rather than through the MCP server: the
 tool under test must not be the one deciding whether its own citation exists.
 
+**Measuring the hop distance instead of asserting it.** A task built to need
+three retrievals may fall to one well-formed query, and the generator has no way
+to know which. `-max-rounds 1` attaches the same tools and the same prompt and
+stops the loop after one round, so each task is labelled, per model, with
+whether a single query of the model's own construction reached the answer. The
+run records the condition as `agentic-1` and names its output `-round1`, because
+a run that differs only in its round budget must not be recorded under the same
+name as the 20-round one; `max_rounds` is in every record's metadata either way.
+It is not the `-fixedk` baseline in another form: fixed-k issues one query the
+harness wrote, one round lets the model write its own and call several tools in
+it.
+
 Its cost is in how the corpus is asked for a row, not in any Go function, so
 the benchmarks run against a real database and skip without one:
 

@@ -154,6 +154,8 @@ func main() {
 			suffix = *ctxLabel
 		case *fixedK > 0:
 			suffix = fmt.Sprintf("fixedk%d", *fixedK)
+		case mcp != nil && *maxRounds == 1:
+			suffix = "round1"
 		case mcp != nil:
 			suffix = "tools"
 		}
@@ -177,6 +179,12 @@ func main() {
 		retrievalMode = *ctxLabel
 	case *fixedK > 0:
 		retrievalMode = "fixedk"
+	case mcp != nil && *maxRounds == 1:
+		// One round of tools and then the answer is forced. It is a different
+		// condition from the 20-round one, not a smaller version of it: what it
+		// measures is whether a single query of the model's own construction
+		// reaches the answer, so it must not be recorded under the same name.
+		retrievalMode = "agentic-1"
 	case mcp != nil:
 		retrievalMode = "agentic"
 	}
@@ -186,6 +194,9 @@ func main() {
 		"prompt_sha256": sha(systemPrompt), "retrieval": retrievalMode,
 		"fixed_k": strconv.Itoa(*fixedK), "context_file": *ctxFile,
 		"mcp_tools": strings.Join(toolNames, ","),
+		// The round budget is part of what a run means, and until now only the
+		// filename carried it.
+		"max_rounds": strconv.Itoa(*maxRounds),
 	}
 	enc := json.NewEncoder(f)
 	var (
