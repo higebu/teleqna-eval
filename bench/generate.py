@@ -544,8 +544,12 @@ def _ap_asn1_task(conn, entry, c, msg_num, msg_title, ie_name, ie_num, kind, val
     stem = (f"The {proto} {msg_title} message carries an information element named "
             f"\"{ie_name}\".")
     if kind == "int":
-        question = (f"{stem} In the ASN.1 with which {proto} defines that IE, what is the "
-                    f"largest value it may take? Answer with a decimal integer.")
+        # "The upper bound of the range it states", not "the largest value it can
+        # take": a fifth of these ranges carry an extension marker, and under
+        # that reading the answer is arguable rather than written down.
+        question = (f"{stem} In the ASN.1 with which {proto} defines that IE, it is an "
+                    f"INTEGER. What is the upper bound of the value range that ASN.1 "
+                    f"states for it? Answer with a decimal integer.")
         gold, answer_kind = value, "scalar"
     elif kind == "size":
         held = "bits" if unit == "BIT STRING" else "octets"
