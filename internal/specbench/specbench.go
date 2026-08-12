@@ -24,7 +24,7 @@ import (
 type Task struct {
 	ID       string          `json:"id"`
 	Type     string          `json:"type"`        // asn1, formula, code, openapi
-	Kind     string          `json:"answer_kind"` // sequence, latex, scalar, set
+	Kind     string          `json:"answer_kind"` // sequence, latex, scalar, set, specset
 	Question string          `json:"question"`
 	Gold     json.RawMessage `json:"gold"`
 	SpecID   string          `json:"spec_id"`
@@ -223,6 +223,11 @@ func Grade(t Task, a Answer) Score {
 		s.Answer = equalSet(got, want)
 		s.Partial = f1(got, want)
 		s.Predicted = strings.Join(got, ", ")
+	case "specset": // a set of specifications, however each one is spelled
+		got, want := normSpecSet(a.Fields()), normSpecSet(t.GoldList())
+		s.Answer = equalSet(got, want)
+		s.Partial = f1(got, want)
+		s.Predicted = strings.Join(got, ", ")
 	case "scalar":
 		got, want := a.Text(), t.GoldString()
 		s.Answer = scalarEqual(got, want)
@@ -242,13 +247,14 @@ func Grade(t Task, a Answer) Score {
 }
 
 var (
-	spaceRe  = regexp.MustCompile(`\s+`)
-	latexCmd = regexp.MustCompile(`\\(left|right|quad|qquad)\b|\\[,;!]`)
-	textRe   = regexp.MustCompile(`\\(text|mathrm|mathit)\{([^}]*)\}`)
-	braceOne = regexp.MustCompile(`\{(\\?[A-Za-z0-9]+)\}`)
-	specIDRe = regexp.MustCompile(`(?i)\b(TS|TR)\s*([0-9]{2}\.[0-9]{3}(?:-[0-9]+)?)`)
-	parenRe  = regexp.MustCompile(`\s*\([^)]*\)\s*$`)
-	numRe    = regexp.MustCompile(`-?\d+`)
+	spaceRe   = regexp.MustCompile(`\s+`)
+	latexCmd  = regexp.MustCompile(`\\(left|right|quad|qquad)\b|\\[,;!]`)
+	textRe    = regexp.MustCompile(`\\(text|mathrm|mathit)\{([^}]*)\}`)
+	braceOne  = regexp.MustCompile(`\{(\\?[A-Za-z0-9]+)\}`)
+	specIDRe  = regexp.MustCompile(`(?i)\b(TS|TR)\s*([0-9]{2}\.[0-9]{3}(?:-[0-9]+)?)`)
+	specNumRe = regexp.MustCompile(`\b([0-9]{2}\.[0-9]{3}(?:-[0-9]+)?)\b`)
+	parenRe   = regexp.MustCompile(`\s*\([^)]*\)\s*$`)
+	numRe     = regexp.MustCompile(`-?\d+`)
 )
 
 // scalarEqual compares a wire code or an element name against its gold.
@@ -308,6 +314,46 @@ func equalSet(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// normSpecSet reduces a list of specifications to the form a set comparison can
+// use: the number each one names, without repeats.
+//
+// A specification is written half a dozen ways — "TS 23.501", "3GPP TS 23.501",
+// "TS23.501", "23.501" — and none of those is more correct than the others. The
+// series prefix is dropped rather than compared, because in this corpus the
+// number alone identifies the document: no number exists as both a TS and a TR.
+// Comparing it would reject a right answer over its spelling, which is the way
+// this scorer has already been wrong six times. A part suffix is kept, because
+// TS 38.101-1 and TS 38.101-2 really are different documents.
+//
+// An entry that names no specification at all is kept, not dropped: it is
+// something the model listed and did not have to, and discarding it would let a
+// wrong answer score as a right one.
+func normSpecSet(in []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, s := range in {
+		n := specNumber(s)
+		if n == "" || seen[n] {
+			continue
+		}
+		seen[n] = true
+		out = append(out, n)
+	}
+	return out
+}
+
+// specNumber pulls "23.501" out of however a specification was named, and
+// falls back to the text itself when there is no number in it.
+func specNumber(s string) string {
+	if mm := specIDRe.FindStringSubmatch(s); mm != nil {
+		return mm[2]
+	}
+	if mm := specNumRe.FindStringSubmatch(s); mm != nil {
+		return mm[1]
+	}
+	return strings.ToUpper(strings.TrimSpace(spaceRe.ReplaceAllString(s, " ")))
 }
 
 // normSpec reduces "ts 38.331", "TS38.331" and "TS 38.331 v19.3.0" to one form.

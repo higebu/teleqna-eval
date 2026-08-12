@@ -302,6 +302,15 @@ func holdsAnswer(title, content string, r Record) bool {
 		// the semantics — so a clause titled after the element is the citation
 		// an implementer wants, whether or not it repeats the number.
 		return name != "" && strings.Contains(normName(title), normName(name))
+	case "subtreerefs":
+		// The answer is a property of a whole clause tree, so no other clause
+		// states it: not a subclause, which holds a part of it, and not a
+		// sibling. The two citations that do hold it — the tree's root, and any
+		// clause containing the root — are decided as exact and ancestor before
+		// this is reached. Without this case the default below compares against
+		// GoldString(), which is empty for a list-shaped gold, so every clause
+		// of the right specification would count as holding the answer.
+		return false
 	case "ngapies", "ngapasn1":
 		// The walk these tasks describe passes through clauses that do not hold
 		// the answer — a message clause names an IE and points at another

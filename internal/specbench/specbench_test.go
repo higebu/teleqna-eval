@@ -169,6 +169,52 @@ func TestGradeSet(t *testing.T) {
 	}
 }
 
+// A clause tree's dependency list is a set of specifications, and a
+// specification has half a dozen spellings none of which is the right one. What
+// the score must turn on is which documents were named, not how.
+func TestGradeSpecSet(t *testing.T) {
+	tk := Task{Type: "subtreerefs", Kind: "specset",
+		Gold:   json.RawMessage(`["TR 25.942","TS 25.104","TS 36.104"]`),
+		SpecID: "TS 38.104", Section: "6.6"}
+	ans := func(a string) Answer {
+		return Answer{Answer: json.RawMessage(a), SpecID: "TS 38.104", Section: "6.6"}
+	}
+	for _, got := range []string{
+		`["TR 25.942","TS 25.104","TS 36.104"]`,
+		`["TS 36.104","TR 25.942","TS 25.104"]`,          // order is not defined
+		`["3GPP TR 25.942","TS25.104","  TS 36.104  "]`,  // spelled as models spell it
+		`["25.942","25.104","36.104"]`,                   // no number is both a TS and a TR
+		`"TR 25.942, TS 25.104, TS 36.104"`,              // a string rather than an array
+		`["TS 25.104","TR 25.942","TS 36.104","25.104"]`, // the same document twice
+	} {
+		if s := Grade(tk, ans(got)); !s.Answer {
+			t.Errorf("answer %s scored wrong: %+v", got, s)
+		}
+	}
+	// A missing specification and an extra one are both wrong, and the partial
+	// score has to separate them from an answer that named nothing right.
+	for _, got := range []string{
+		`["TR 25.942","TS 25.104"]`,
+		`["TR 25.942","TS 25.104","TS 36.104","TS 38.101-1"]`,
+	} {
+		s := Grade(tk, ans(got))
+		if s.Answer || s.Partial == 0 {
+			t.Errorf("answer %s scored %+v, want wrong with partial credit", got, s)
+		}
+	}
+	// A part suffix names a different document and must not be filed under the
+	// base number, and something that is not a specification at all counts
+	// against the answer rather than vanishing from it.
+	for _, got := range []string{
+		`["TR 25.942","TS 25.104","TS 36.104-1"]`,
+		`["TR 25.942","TS 25.104","TS 36.104","RFC 3550"]`,
+	} {
+		if s := Grade(tk, ans(got)); s.Answer {
+			t.Errorf("answer %s scored correct", got)
+		}
+	}
+}
+
 // Task files written before answer_kind existed must score as they did.
 func TestKindFallsBackToType(t *testing.T) {
 	for typ, want := range map[string]string{"asn1": "sequence", "openapi": "set", "code": "scalar", "formula": "latex"} {
