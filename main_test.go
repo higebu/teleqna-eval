@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"teleqna-eval/internal/eval"
-	"teleqna-eval/internal/teleqna"
+	"3gpp-mcp-bench/internal/eval"
+	"3gpp-mcp-bench/internal/teleqna"
 )
 
 var planQuestions = []teleqna.Question{

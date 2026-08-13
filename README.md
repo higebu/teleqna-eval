@@ -1,4 +1,4 @@
-# teleqna-eval
+# 3gpp-mcp-bench
 
 Evaluation harness that measures how much [3gpp-mcp](https://github.com/higebu/3gpp-mcp)
 improves LLM accuracy on [TeleQnA](https://github.com/netop-team/TeleQnA)

@@ -101,7 +101,7 @@ func (c *Client) ServerInfo() map[string]string {
 	res, err := c.rpc("initialize", map[string]any{
 		"protocolVersion": "2025-06-18",
 		"capabilities":    map[string]any{},
-		"clientInfo":      map[string]any{"name": "teleqna-eval", "version": "1"},
+		"clientInfo":      map[string]any{"name": "3gpp-mcp-bench", "version": "1"},
 	})
 	if err != nil {
 		return nil

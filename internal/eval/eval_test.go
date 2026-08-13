@@ -7,9 +7,9 @@ import (
 	"sync"
 	"testing"
 
-	"teleqna-eval/internal/llm"
-	"teleqna-eval/internal/prompt"
-	"teleqna-eval/internal/teleqna"
+	"3gpp-mcp-bench/internal/llm"
+	"3gpp-mcp-bench/internal/prompt"
+	"3gpp-mcp-bench/internal/teleqna"
 )
 
 // fakeBackend replays scripted turns and records how it was driven.

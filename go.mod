@@ -1,4 +1,4 @@
-module teleqna-eval
+module 3gpp-mcp-bench
 
 go 1.26
 

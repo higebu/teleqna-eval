@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"teleqna-eval/internal/teleqna"
+	"3gpp-mcp-bench/internal/teleqna"
 )
 
 var q = teleqna.Question{

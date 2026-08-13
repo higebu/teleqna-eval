@@ -17,7 +17,7 @@ import (
 	"strconv"
 	"strings"
 
-	"teleqna-eval/internal/teleqna"
+	"3gpp-mcp-bench/internal/teleqna"
 )
 
 // Parsed is one reply turned into an option number. Tier records which
