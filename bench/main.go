@@ -20,10 +20,10 @@ import (
 	"sync"
 	"time"
 
-	"teleqna-eval/internal/llm"
-	"teleqna-eval/internal/mcpclient"
-	"teleqna-eval/internal/retrieval"
-	"teleqna-eval/internal/specbench"
+	"3gpp-mcp-bench/internal/llm"
+	"3gpp-mcp-bench/internal/mcpclient"
+	"3gpp-mcp-bench/internal/retrieval"
+	"3gpp-mcp-bench/internal/specbench"
 )
 
 // The one prompt both conditions use. It never mentions tools: whether tools

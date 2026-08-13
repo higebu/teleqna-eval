@@ -6,8 +6,8 @@ import (
 	"log"
 	"sync"
 
-	"teleqna-eval/internal/llm"
-	"teleqna-eval/internal/teleqna"
+	"3gpp-mcp-bench/internal/llm"
+	"3gpp-mcp-bench/internal/teleqna"
 )
 
 type Summary struct {

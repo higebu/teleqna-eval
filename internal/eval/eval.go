@@ -12,10 +12,10 @@ import (
 	"strings"
 	"time"
 
-	"teleqna-eval/internal/llm"
-	"teleqna-eval/internal/prompt"
-	"teleqna-eval/internal/retrieval"
-	"teleqna-eval/internal/teleqna"
+	"3gpp-mcp-bench/internal/llm"
+	"3gpp-mcp-bench/internal/prompt"
+	"3gpp-mcp-bench/internal/retrieval"
+	"3gpp-mcp-bench/internal/teleqna"
 )
 
 // ToolCaller is the MCP side of the loop; a nil ToolCaller is the no-tools

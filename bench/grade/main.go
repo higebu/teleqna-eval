@@ -19,7 +19,7 @@ import (
 	"runtime/debug"
 	"strings"
 
-	"teleqna-eval/internal/specbench"
+	"3gpp-mcp-bench/internal/specbench"
 )
 
 func main() {

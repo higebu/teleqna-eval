@@ -1,4 +1,4 @@
-// teleqna-eval runs TeleQnA multiple-choice questions against an
+// 3gpp-mcp-bench runs TeleQnA multiple-choice questions against an
 // OpenAI-compatible chat API, optionally bridging tools from a
 // 3gpp-mcp server so the model can consult 3GPP specifications while
 // answering. Results are written as JSONL plus a summary line.
@@ -19,11 +19,11 @@ import (
 	"strings"
 	"time"
 
-	"teleqna-eval/internal/eval"
-	"teleqna-eval/internal/llm"
-	"teleqna-eval/internal/mcpclient"
-	"teleqna-eval/internal/prompt"
-	"teleqna-eval/internal/teleqna"
+	"3gpp-mcp-bench/internal/eval"
+	"3gpp-mcp-bench/internal/llm"
+	"3gpp-mcp-bench/internal/mcpclient"
+	"3gpp-mcp-bench/internal/prompt"
+	"3gpp-mcp-bench/internal/teleqna"
 )
 
 // meta is written next to the result file. It records everything needed to say
